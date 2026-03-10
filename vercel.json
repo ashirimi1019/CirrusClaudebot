@@ -1,0 +1,15 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cd frontend && npm install && npm run build",
+  "outputDirectory": "frontend/.next",
+  "installCommand": "cd frontend && npm install",
+  "framework": "nextjs",
+  "env": {
+    "CIRRUS_REPO_ROOT": "/var/task"
+  },
+  "functions": {
+    "frontend/src/app/api/skills/run/route.ts": {
+      "maxDuration": 300
+    }
+  }
+}

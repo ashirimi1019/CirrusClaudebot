@@ -1,156 +1,167 @@
+/**
+ * /api/skills/run
+ *
+ * Streams skill output back to the browser via Server-Sent Events.
+ *
+ * On LOCAL dev: identical to before — the existing local files are used directly.
+ * On VERCEL:    skills are imported via webpack aliases (no child_process.spawn),
+ *               writes land in /tmp/cirrus-work, and process.cwd() is patched.
+ *
+ * Query params:
+ *   skill    = 1–6 (required)
+ *   offer    = offer slug (required for skills 2–6)
+ *   campaign = campaign slug (required for skills 3–6)
+ *   formData = JSON-encoded form answers (skills 1–2)
+ */
+
 import { NextRequest } from 'next/server';
-import { spawn } from 'child_process';
-import path from 'path';
+import { ConsoleCapture } from '@/lib/console-capture';
+import {
+  withWriteDir,
+  ensureContextFiles,
+  prepareInputFiles,
+} from '@/lib/vercel-paths';
 
-// Map skill number → script filename
-const SKILL_SCRIPTS: Record<string, string> = {
-  '1': 'scripts/run-skill-1-new-offer.ts',
-  '2': 'scripts/run-skill-2-campaign-strategy.ts',
-  '3': 'scripts/run-skill-3-campaign-copy.ts',
-  '4': 'scripts/run-skill-4-find-leads.ts',
-  '5': 'scripts/run-skill-5-launch-outreach.ts',
-  '6': 'scripts/run-skill-6-campaign-review.ts',
-};
+// Allow up to 5 minutes for Skill 4 (Apollo API calls + lead scoring)
+export const maxDuration = 300;
 
-/**
- * Build stdin answers for Skill 1 (New Offer).
- * Order matches the readline prompts in skill-1-new-offer.ts.
- */
-function buildSkill1Stdin(data: Record<string, string>): string {
-  return [
-    data.name || '',
-    data.category || '',
-    data.targetCustomer || '',
-    data.customerProblem || '',
-    data.whyNow || '',
-    data.customerAlternative || '',
-    data.observableSuccess || '',
-    data.valueProp || '',
-    data.differentiators || '',
-    data.salesModel || '',
-    data.objectionHandlers || '',
-    data.goToMarket || '',
-    data.pricingPackaging || '',
-    data.successStories || '',
-  ].join('\n') + '\n';
-}
-
-/**
- * Build stdin answers for Skill 2 (Campaign Strategy).
- * Order matches the readline prompts in skill-2-campaign-strategy.ts.
- */
-function buildSkill2Stdin(data: Record<string, string>): string {
-  return [
-    data.offer || '',           // offer slug (if not provided via first prompt)
-    data.campaignName || '',
-    data.signalType || '',
-    data.signalHypothesis || '',
-    data.detectionMethod || '',
-    data.primaryAPI || 'Apollo.io',
-    data.secondaryAPIs || 'Apollo.io enrichment (built-in)',
-    data.messagingFramework || 'PVP',
-    data.targetGeography || 'US',
-    data.companyFilters || 'Series A+, 50-1000 employees',
-    data.buyerFilters || 'CTO, VP Engineering, Founder',
-    data.expectedVolume || '20-30 companies per search',
-    data.expectedFit || '60% will match ICP',
-  ].join('\n') + '\n';
-}
+type FormData = Record<string, string>;
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const skill = searchParams.get('skill');
-  const offer = searchParams.get('offer') || '';
-  const campaign = searchParams.get('campaign') || '';
+  const skillParam = searchParams.get('skill');
+  const offer = searchParams.get('offer') ?? '';
+  const campaign = searchParams.get('campaign') ?? '';
 
-  if (!skill || !SKILL_SCRIPTS[skill]) {
+  const skill = Number(skillParam);
+  if (!skill || skill < 1 || skill > 6) {
     return new Response('Invalid skill number', { status: 400 });
   }
 
-  const scriptPath = SKILL_SCRIPTS[skill];
-  // The frontend runs from /frontend, monorepo root is one level up
-  const monorepoRoot = path.join(process.cwd(), '..');
-
-  // Build CLI args
-  const args = ['--loader', 'ts-node/esm', scriptPath];
-  // Skills 3-6 accept offer + campaign as argv[2] and argv[3]
-  if (['3', '4', '5', '6'].includes(skill)) {
-    if (offer) args.push(offer);
-    if (campaign) args.push(campaign);
-  }
-
-  // Decode optional JSON-encoded form data (used by Skills 1 and 2)
-  const formDataParam = searchParams.get('formData');
-  let formData: Record<string, string> = {};
-  if (formDataParam) {
+  // Decode optional JSON form data (Skills 1 & 2)
+  let formData: FormData = {};
+  const fdParam = searchParams.get('formData');
+  if (fdParam) {
     try {
-      formData = JSON.parse(decodeURIComponent(formDataParam));
+      formData = JSON.parse(decodeURIComponent(fdParam));
     } catch {
-      // ignore parse errors
+      /* ignore malformed JSON */
     }
   }
 
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
-    start(controller) {
-      const child = spawn('node', args, {
-        cwd: monorepoRoot,
-        // Pass parent env so dotenv can supplement with root .env values
-        env: { ...process.env, FORCE_COLOR: '0' },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-
-      // Pipe stdin answers for interactive skills
-      try {
-        if (skill === '1') {
-          const stdin = buildSkill1Stdin(formData);
-          child.stdin.write(stdin);
-          child.stdin.end();
-        } else if (skill === '2') {
-          const stdin = buildSkill2Stdin({ offer, ...formData });
-          child.stdin.write(stdin);
-          child.stdin.end();
-        } else {
-          child.stdin.end();
-        }
-      } catch {
-        child.stdin.end();
-      }
-
+    async start(controller) {
       const sendEvent = (payload: Record<string, unknown>) => {
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
         } catch {
-          // stream may already be closed
+          /* stream already closed */
         }
       };
 
-      child.stdout.on('data', (chunk: Buffer) => {
-        const text = chunk.toString();
-        const lines = text.split('\n');
-        for (const line of lines) {
-          if (line) sendEvent({ type: 'log', text: line });
+      // Capture console.log/warn/error and forward every line as an SSE event
+      const capture = new ConsoleCapture((line) => sendEvent({ type: 'log', text: line }));
+
+      try {
+        capture.start();
+
+        // 1. Copy context/ from bundle → /tmp (no-op on local dev or warm Vercel instances)
+        await ensureContextFiles();
+
+        // 2. Reconstruct any missing input files from Supabase (Vercel only)
+        await prepareInputFiles(skill, offer, campaign);
+
+        // 3. Run the skill inside the patched CWD / exit guard
+        await withWriteDir(async () => {
+          // Skills 3–6 read offer/campaign from process.argv; patch before calling
+          const savedArgv = process.argv.slice();
+          process.argv = [process.argv[0], process.argv[1], offer, campaign];
+
+          try {
+            switch (skill) {
+              case 1: {
+                const { runSkill1NewOffer } = await import(
+                  /* webpackChunkName: "skill-1" */
+                  '@cirrus/skills/skill-1-new-offer'
+                );
+                // OfferConfig shape matches the 13-field form
+                await runSkill1NewOffer(formData as unknown as Parameters<typeof runSkill1NewOffer>[0]);
+                break;
+              }
+
+              case 2: {
+                const { runSkill2CampaignStrategy } = await import(
+                  /* webpackChunkName: "skill-2" */
+                  '@cirrus/skills/skill-2-campaign-strategy'
+                );
+                await runSkill2CampaignStrategy(
+                  offer,
+                  formData as unknown as Parameters<typeof runSkill2CampaignStrategy>[1],
+                );
+                break;
+              }
+
+              case 3: {
+                const { runSkill3CampaignCopy } = await import(
+                  /* webpackChunkName: "skill-3" */
+                  '@cirrus/skills/skill-3-campaign-copy'
+                );
+                await runSkill3CampaignCopy();
+                break;
+              }
+
+              case 4: {
+                const { runSkill4FindLeads } = await import(
+                  /* webpackChunkName: "skill-4" */
+                  '@cirrus/skills/skill-4-find-leads'
+                );
+                await runSkill4FindLeads();
+                break;
+              }
+
+              case 5: {
+                const { runSkill5LaunchOutreach } = await import(
+                  /* webpackChunkName: "skill-5" */
+                  '@cirrus/skills/skill-5-launch-outreach'
+                );
+                await runSkill5LaunchOutreach(offer, campaign);
+                break;
+              }
+
+              case 6: {
+                const { runSkill6CampaignReview } = await import(
+                  /* webpackChunkName: "skill-6" */
+                  '@cirrus/skills/skill-6-campaign-review'
+                );
+                await runSkill6CampaignReview(offer, campaign, {
+                  apolloSequenceId: formData.apolloSequenceId ?? '',
+                  meetings: formData.meetings ? Number(formData.meetings) : undefined,
+                  closed: formData.closed ? Number(formData.closed) : undefined,
+                  autoMode: true,
+                });
+                break;
+              }
+            }
+          } finally {
+            process.argv = savedArgv;
+          }
+        });
+
+        sendEvent({ type: 'done', code: 0 });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        sendEvent({ type: 'log', text: `❌ ${msg}` });
+        sendEvent({ type: 'done', code: 1 });
+      } finally {
+        capture.stop();
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
         }
-      });
-
-      child.stderr.on('data', (chunk: Buffer) => {
-        const text = chunk.toString();
-        const lines = text.split('\n');
-        for (const line of lines) {
-          if (line) sendEvent({ type: 'log', text: line });
-        }
-      });
-
-      child.on('close', (code) => {
-        sendEvent({ type: 'done', code: code ?? 0 });
-        try { controller.close(); } catch { /* already closed */ }
-      });
-
-      child.on('error', (err) => {
-        sendEvent({ type: 'error', message: err.message });
-        try { controller.close(); } catch { /* already closed */ }
-      });
+      }
     },
   });
 

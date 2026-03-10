@@ -35,3 +35,9 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude & tool internals
+.claude/
+.emergent/
+memory/
+.next/
