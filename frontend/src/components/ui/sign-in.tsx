@@ -28,6 +28,8 @@ interface SignInPageProps {
   onGoogleSignIn?: () => void;
   onResetPassword?: () => void;
   onCreateAccount?: () => void;
+  loading?: boolean;
+  error?: string;
 }
 
 // --- SUB-COMPONENTS ---
@@ -59,6 +61,8 @@ export const SignInPage: React.FC<SignInPageProps> = ({
   onGoogleSignIn,
   onResetPassword,
   onCreateAccount,
+  loading = false,
+  error = "",
 }) => {
   const [showPassword, setShowPassword] = useState(false);
 
@@ -124,11 +128,18 @@ export const SignInPage: React.FC<SignInPageProps> = ({
                 </a>
               </div>
 
+              {error && (
+                <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
+                  {error}
+                </p>
+              )}
+
               <button
                 type="submit"
-                className="animate-element animate-delay-600 w-full rounded-2xl bg-primary py-4 font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+                disabled={loading}
+                className="animate-element animate-delay-600 w-full rounded-2xl bg-primary py-4 font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Sign In
+                {loading ? "Signing in…" : "Sign In"}
               </button>
             </form>
 
