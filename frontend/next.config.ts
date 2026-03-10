@@ -33,6 +33,18 @@ const nextConfig: NextConfig = {
       "@cirrus/skills": path.resolve(__dirname, "../src/core/skills"),
       "@cirrus/lib": path.resolve(__dirname, "../src/lib"),
     };
+
+    // Skill files live at ../src/ (outside frontend/).  When webpack follows
+    // their imports (axios, @supabase/supabase-js, etc.) it walks UP from
+    // ../src/lib/clients/ and never reaches frontend/node_modules because
+    // that directory is a SIBLING, not a parent.
+    // Explicitly adding it here makes webpack find those packages even when
+    // the root node_modules/ doesn't exist (Vercel only installs frontend/).
+    config.resolve.modules = [
+      ...(config.resolve.modules ?? ["node_modules"]),
+      path.resolve(__dirname, "node_modules"),
+    ];
+
     return config;
   },
 };
