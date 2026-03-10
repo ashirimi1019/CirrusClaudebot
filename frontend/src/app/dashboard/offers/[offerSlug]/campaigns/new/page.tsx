@@ -110,6 +110,7 @@ export default function NewCampaignPage() {
         .replace(/[^\w\s-]/g, '')
         .trim()
         .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
         .substring(0, 100);
       setTimeout(
         () => router.push(`/dashboard/offers/${offerSlug}/campaigns/${slug}`),

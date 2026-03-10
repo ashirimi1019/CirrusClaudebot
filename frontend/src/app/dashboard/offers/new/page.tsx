@@ -113,6 +113,7 @@ export default function NewOfferPage() {
         .replace(/[^\w\s-]/g, '')
         .trim()
         .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
         .substring(0, 100);
       setTimeout(() => router.push(`/dashboard/offers/${slug}`), 1500);
     }

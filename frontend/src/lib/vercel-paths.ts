@@ -100,12 +100,13 @@ function copyDirRecursive(src: string, dst: string): void {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getAdminClient(): Promise<any | null> {
-  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return null;
+  const url = process.env.SUPABASE_URL;
+  // Prefer service role key (bypasses RLS); fall back to anon key for reads
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+  if (!url || !key) return null;
   const { createClient } = await import('@supabase/supabase-js');
-  return createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY,
-  );
+  return createClient(url, key);
 }
 
 // ─── Input file reconstruction ───────────────────────────────────────────────

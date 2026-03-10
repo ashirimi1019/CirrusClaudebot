@@ -43,7 +43,7 @@ async function prompt(rl: readline.Interface, question: string): Promise<string>
 }
 
 function generateSlug(text: string): string {
-  return text.toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').substring(0, 100);
+  return text.toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').replace(/-+/g, '-').substring(0, 100);
 }
 
 async function readPositioning(offerSlug: string): Promise<string> {
