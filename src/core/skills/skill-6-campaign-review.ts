@@ -276,7 +276,7 @@ ${mistakes}
 Generated: ${new Date().toISOString()}
 `;
 
-    const learningsPath = path.join(process.cwd(), 'offers', offerSlug, 'results', `${campaignSlug}-learnings.md`);
+    const learningsPath = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlugArg || campaignSlug, 'results', 'learnings.md');
     fs.mkdirSync(path.dirname(learningsPath), { recursive: true });
     fs.writeFileSync(learningsPath, learningsContent);
     console.log(`\n✅ Learnings saved: ${learningsPath}`);

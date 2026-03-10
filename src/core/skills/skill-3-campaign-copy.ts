@@ -161,6 +161,13 @@ export async function runSkill3CampaignCopy(): Promise<void> {
     fs.writeFileSync(emailMdPath, emailMdLines.join('\n'));
     console.log(`💾 Saved ${emailMdPath}`);
 
+    // Also save individual .txt files (required by Skill 5)
+    emailVariants.forEach((variant, idx) => {
+      const txtPath = path.join(copyDir, `email-variant-${idx + 1}.txt`);
+      const txtContent = `---\nSubject: ${variant.subject}\n\n${variant.body}\n---`;
+      fs.writeFileSync(txtPath, txtContent);
+    });
+
     // Generate LinkedIn variants
     console.log('\n💼 Generating LinkedIn variants...');
     const linkedinVariants = [
@@ -251,7 +258,7 @@ export async function runSkill3CampaignCopy(): Promise<void> {
             campaign_id: campaign.id,
             variant_name: `email-${idx + 1}`,
             channel: 'email',
-            subject: variant.subject,
+            subject_line: variant.subject,
             body: variant.body,
           })
         )

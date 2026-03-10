@@ -208,9 +208,9 @@ export async function runSkill4FindLeads(): Promise<void> {
         dbCompany = await upsertCompany({
           domain,
           name: company.name,
-          size_min: company.employee_count || null,
-          size_max: null,
+          employee_count: company.employee_count || null,
           funding_stage: company.funding_stage || null,
+          industry: company.industry || null,
           country: company.country || geography[0] || 'US',
         });
       } catch (err: any) {

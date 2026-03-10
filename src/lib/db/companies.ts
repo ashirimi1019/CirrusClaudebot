@@ -3,9 +3,9 @@ import { getSupabaseClient, Company } from '../supabase.ts';
 export async function upsertCompany(data: {
   domain: string;
   name?: string | null;
-  size_min?: number | null;
-  size_max?: number | null;
+  employee_count?: number | null;
   funding_stage?: string | null;
+  industry?: string | null;
   country?: string;
 }): Promise<Company> {
   const sb = getSupabaseClient();
@@ -15,11 +15,11 @@ export async function upsertCompany(data: {
     .upsert({
       domain: data.domain,
       name: data.name || null,
-      size_min: data.size_min || null,
-      size_max: data.size_max || null,
+      employee_count: data.employee_count || null,
       funding_stage: data.funding_stage || null,
+      industry: data.industry || null,
       country: data.country || 'US',
-    })
+    }, { onConflict: 'domain' })
     .select()
     .single();
 

@@ -133,7 +133,7 @@ export async function runSkill5LaunchOutreach(
   offerSlugArg?: string,
   campaignSlugArg?: string,
   config?: OutreachConfig
-): Promise<void> {
+): Promise<string | void> {
   console.log('\n========================================');
   console.log('SKILL 5: LAUNCH OUTREACH (Apollo Sequences)');
   console.log('========================================\n');

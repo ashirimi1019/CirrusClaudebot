@@ -27,21 +27,24 @@ export interface Company {
   id: string;
   domain: string;
   name: string | null;
-  size_min: number | null;
-  size_max: number | null;
+  linkedin_url: string | null;
+  company_size: string | null;
+  employee_count: number | null;
   funding_stage: string | null;
   funding_amount: number | null;
+  industry: string | null;
+  location: string | null;
   country: string;
-  linkedin_url: string | null;
   tech_stack_summary: string | null;
   hiring_signal_summary: string | null;
   company_segment: string | null;
-  fit_score: number | null;
+  fit_score: number;
   disqualified: boolean;
   disqualify_reason: string | null;
   source: string | null;
   raw_data_json: Record<string, unknown> | null;
   created_at: string;
+  updated_at: string;
 }
 
 export interface Evidence {
@@ -96,10 +99,11 @@ export interface CampaignCompany {
   id: string;
   campaign_id: string;
   company_id: string;
-  status: string;
-  added_at: string;
-  last_contacted_at: string | null;
-  notes: string | null;
+  signal_details: string | null;
+  fit_score: number;
+  included: boolean;
+  exclusion_reason: string | null;
+  created_at: string;
 }
 
 // ─── Messaging ───────────────────────────────────────────────────────────────
@@ -108,30 +112,30 @@ export interface CampaignCompany {
 export interface MessageVariant {
   id: string;
   campaign_id: string;
-  variant_name: string;
   channel: OutreachChannel;
-  subject: string | null;
+  variant_name: string;
+  subject_line: string | null;
   body: string | null;
-  personalization_notes: string | null;
+  framework_used: string | null;
   created_at: string;
 }
 
 export interface Message {
   id: string;
   campaign_id: string;
-  contact_id: string;
-  variant_id: string | null;
+  contact_id: string | null;
+  company_id: string | null;
+  message_variant_id: string | null;
   channel: OutreachChannel;
-  subject: string | null;
-  body: string | null;
+  personalized_subject: string | null;
   personalized_body: string | null;
-  status: SendStatus;
   apollo_sequence_id: string | null;
-  apollo_contact_id: string | null;
+  send_status: SendStatus;
   sent_at: string | null;
-  opened_at: string | null;
   replied_at: string | null;
+  reply_category: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 export interface Draft {
@@ -149,27 +153,24 @@ export interface Draft {
 export interface CampaignMetrics {
   id: string;
   campaign_id: string;
-  emails_sent: number;
-  emails_opened: number;
-  replies_total: number;
-  replies_positive: number;
-  replies_negative: number;
-  replies_objection: number;
-  replies_referral: number;
-  replies_ooo: number;
-  bounces: number;
-  meetings_booked: number;
-  deals_closed: number;
+  total_companies: number;
+  total_contacts: number;
+  total_messages: number;
+  total_replies: number;
   total_interested: number;
+  total_meetings: number;
   total_warm_leads: number;
   total_buyers: number;
   reply_rate: number | null;
-  bounce_rate: number | null;
-  open_rate: number | null;
   interested_rate: number | null;
   meeting_rate: number | null;
   buyer_rate: number | null;
-  measured_at: string;
+  emails_opened: number;
+  bounces: number;
+  deals_closed: number;
+  open_rate: number | null;
+  bounce_rate: number | null;
+  updated_at: string;
   created_at: string;
 }
 
@@ -181,9 +182,8 @@ export interface ToolUsage {
   action_name: string | null;
   units_used: number;
   estimated_cost: number | null;
-  request_payload: Record<string, unknown> | null;
-  response_summary: string | null;
-  called_at: string;
+  metadata_json: Record<string, unknown> | null;
+  created_at: string;
 }
 
 export interface ReplySentiment {

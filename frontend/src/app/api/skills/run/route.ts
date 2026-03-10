@@ -152,8 +152,13 @@ export async function GET(request: NextRequest) {
         sendEvent({ type: 'done', code: 0 });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        sendEvent({ type: 'log', text: `❌ ${msg}` });
-        sendEvent({ type: 'done', code: 1 });
+        // process.exit(0) throws but is actually a clean success
+        if (msg === 'Skill called process.exit(0)') {
+          sendEvent({ type: 'done', code: 0 });
+        } else {
+          sendEvent({ type: 'log', text: `❌ ${msg}` });
+          sendEvent({ type: 'done', code: 1 });
+        }
       } finally {
         capture.stop();
         try {

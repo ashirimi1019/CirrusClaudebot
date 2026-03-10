@@ -40,9 +40,7 @@ async function logApiCall(tool_name: string, estimated_cost: number, request_pay
       action_name: tool_name,
       units_used: 1,
       estimated_cost,
-      request_payload,
-      response_summary: JSON.stringify(response_data).substring(0, 500),
-      called_at: new Date().toISOString(),
+      metadata_json: { request: request_payload, response: response_data },
     });
   } catch {
     // Non-fatal: log silently

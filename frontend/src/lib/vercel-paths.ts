@@ -310,7 +310,14 @@ async function reconstructCopyFiles(supabase: any, campaignSlug: string, campaig
       )
       .join('\n\n---\n\n');
     fs.writeFileSync(emailFile, content, 'utf8');
-    console.log('[vercel-paths] reconstructed email-variants.md');
+
+    // Also write individual .txt files — required by Skill 5
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    emailVars.forEach((v: any, i: number) => {
+      const txtPath = path.join(copyDir, `email-variant-${i + 1}.txt`);
+      fs.writeFileSync(txtPath, `---\nSubject: ${v.subject_line ?? ''}\n\n${v.body ?? ''}\n---`, 'utf8');
+    });
+    console.log('[vercel-paths] reconstructed email-variants.md + .txt files');
   }
 
   if (liVars.length) {
