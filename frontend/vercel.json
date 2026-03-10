@@ -1,0 +1,15 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "installCommand": "npm install",
+  "framework": "nextjs",
+  "env": {
+    "CIRRUS_REPO_ROOT": "/var/task"
+  },
+  "functions": {
+    "src/app/api/skills/run/route.ts": {
+      "maxDuration": 300
+    }
+  }
+}
