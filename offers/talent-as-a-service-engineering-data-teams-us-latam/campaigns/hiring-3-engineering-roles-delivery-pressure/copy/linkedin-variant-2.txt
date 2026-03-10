@@ -1,0 +1,26 @@
+LinkedIn DM - Variant
+
+---
+
+Hi [Name],
+
+Quick note - I saw [Company] posted a job for [role]. Finding [role plural] takes most companies months.
+
+We typically do it in weeks because we start with vetted candidates, not job posts.
+
+No pressure, but thought worth flagging.
+
+[Your name]
+
+---
+
+Generated: 2026-02-26T02:37:52.050Z
+Offer: talent-as-a-service-engineering-data-teams-us-latam
+Campaign: hiring-3-engineering-roles-delivery-pressure
+
+INSTRUCTIONS:
+1. This is for manual sending only (never automate LinkedIn)
+2. Personalize slightly for each person
+3. Wait 2-3 days after connecting before sending DM
+4. Send 5-10 per day max (avoid bot detection)
+5. Vary the message slightly (don't copy-paste identically)

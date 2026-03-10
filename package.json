@@ -1,0 +1,37 @@
+{
+  "name": "career-source-group-agent",
+  "version": "0.1.0",
+  "description": "Agentic AI system for signal-driven staffing outreach",
+  "type": "module",
+  "main": "src/index.ts",
+  "private": true,
+  "scripts": {
+    "skill:1": "node --loader ts-node/esm scripts/run-skill-1-new-offer.ts",
+    "skill:2": "node --loader ts-node/esm scripts/run-skill-2-campaign-strategy.ts",
+    "skill:3": "node --loader ts-node/esm scripts/run-skill-3-campaign-copy.ts",
+    "skill:4": "node --loader ts-node/esm scripts/run-skill-4-find-leads.ts",
+    "skill:5": "node --loader ts-node/esm scripts/run-skill-5-launch-outreach.ts",
+    "skill:6": "node --loader ts-node/esm scripts/run-skill-6-campaign-review.ts",
+    "pipeline": "node --loader ts-node/esm scripts/run-pipeline.ts",
+    "sheets:sync": "node --loader ts-node/esm scripts/run-sheets-sync.ts",
+    "brain": "node --loader ts-node/esm scripts/run-brain.ts",
+    "skill:ingest": "node --loader ts-node/esm scripts/run-reply-ingestion.ts",
+    "dev": "echo 'Use npm run skill:1 through skill:6 to run individual skills'",
+    "test": "echo 'No tests yet. Run skills to test functionality.'"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.50.0",
+    "axios": "^1.10.0",
+    "csv-parse": "^6.1.0",
+    "dotenv": "^16.3.1",
+    "googleapis": "^171.4.0",
+    "uuid": "^9.0.1",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "ts-node": "^10.9.1",
+    "typescript": "5.9.3"
+  },
+  "packageManager": "npm@10.2.0"
+}

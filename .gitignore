@@ -1,0 +1,37 @@
+# Environment variables — NEVER commit these
+.env
+.env.local
+.env.*.local
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Next.js build output
+frontend/.next/
+frontend/out/
+
+# TypeScript build info
+*.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
+
+# Generated lead data
+offers/*/campaigns/*/leads/
+offers/*/campaigns/*/outreach/
+
+# Debug / test scratch files
+debug-*.ts
+test-*.ts
+test_reports/
+test_result.md
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db

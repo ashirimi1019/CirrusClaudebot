@@ -1,0 +1,42 @@
+{
+  "_comment": "Fill this in once per offer+campaign. Then run: npm run pipeline",
+
+  "offer": {
+    "name": "Talent As A Service - Engineering Teams",
+    "category": "Talent Augmentation / Staffing",
+    "targetCustomer": "US-based SaaS companies and tech consultancies with 50-500 employees that are scaling engineering teams",
+    "customerProblem": "They have open engineering roles sitting unfilled for 3-4+ months, causing delivery delays and missed roadmap targets",
+    "whyNow": "Post-2023 hiring freeze lift — companies are aggressively hiring again but talent market is tight and expensive",
+    "customerAlternative": "Post on LinkedIn/Indeed, use a Big 4 recruiter, or hire a full-time internal recruiter",
+    "observableSuccess": "Roles filled in 3-4 weeks, not 3-4 months. Engineers onboarded and delivering within 30 days",
+    "valueProp": "We place pre-vetted LATAM engineers into US tech teams in 3-4 weeks — faster, cheaper, same timezone alignment",
+    "differentiators": "Pre-vetted talent pool (not reactive searches), LATAM timezone overlap, English-fluent, pod model available, no placement fees until hired",
+    "salesModel": "Intro call → candidate shortlist in 5 days → interviews → hire. Monthly retainer or success fee",
+    "objectionHandlers": "We've placed X engineers in the last 90 days. LATAM engineers work US hours. English fluency tested. 90-day guarantee",
+    "goToMarket": "Signal-driven outbound via Apollo — target companies actively posting engineering jobs",
+    "pricingPackaging": "Success fee: 15% of first-year salary. Retainer: $2,500/month for dedicated sourcing",
+    "successStories": "Placed 3 data engineers at [SaaS Co] in 18 days. Placed ML team of 4 at [Consulting Firm] within 30 days"
+  },
+
+  "campaign": {
+    "name": "Hiring 3 Engineering Roles - Delivery Pressure",
+    "signalType": "Active job postings for engineering roles",
+    "signalHypothesis": "Companies posting 2+ engineering roles are under delivery pressure and receptive to staffing solutions",
+    "detectionMethod": "Apollo.io company search with engineering role keywords",
+    "primaryAPI": "Apollo.io",
+    "secondaryAPIs": "Apollo.io enrichment (built-in)",
+    "messagingFramework": "Use-Case-Driven",
+    "targetGeography": "United States",
+    "companyFilters": "Series A+, 50-1000 employees, SaaS or tech consulting",
+    "buyerFilters": "CTO, VP Engineering, Director of Engineering, Founder",
+    "expectedVolume": "25-50 qualifying companies per run",
+    "expectedFit": "65% will match ICP"
+  },
+
+  "pipeline": {
+    "skipIfExists": true,
+    "autoCreateSequence": true,
+    "apolloSequenceId": null,
+    "autoMode": true
+  }
+}
