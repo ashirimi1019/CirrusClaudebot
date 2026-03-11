@@ -69,6 +69,17 @@ interface CampaignMetrics {
   meeting_rate: number | null;
 }
 
+// ─── Skill name map ───────────────────────────────────────────────────────────
+
+const SKILL_NAMES: Record<number, string> = {
+  1: 'New Offer',
+  2: 'Campaign Strategy',
+  3: 'Campaign Copy',
+  4: 'Find Leads',
+  5: 'Launch Outreach',
+  6: 'Campaign Review',
+};
+
 // ─── CopyButton ───────────────────────────────────────────────────────────────
 
 function CopyButton({ text }: { text: string }) {
@@ -262,8 +273,9 @@ export default function CampaignDashboardPage() {
   const { logs, isRunning, exitCode, runningSkill, runSkill, logEndRef } =
     useCampaignSkillRunner(offerSlug, campaignSlug);
 
-  // ── Resolve campaign ID from slugs ─────────────────────────────────────────
+  // ── Resolve campaign ID + name from slugs ──────────────────────────────────
   const [campaignId, setCampaignId] = useState<string | null>(null);
+  const [campaignName, setCampaignName] = useState<string | null>(null);
 
   useEffect(() => {
     const supabase = createClient();
@@ -276,12 +288,15 @@ export default function CampaignDashboardPage() {
         if (!offer) return;
         supabase
           .from('campaigns')
-          .select('id')
+          .select('id, name')
           .eq('offer_id', offer.id)
           .eq('slug', campaignSlug)
           .single()
-          .then(({ data: campaign }: { data: { id: string } | null }) => {
-            if (campaign) setCampaignId(campaign.id);
+          .then(({ data: campaign }: { data: { id: string; name: string | null } | null }) => {
+            if (campaign) {
+              setCampaignId(campaign.id);
+              setCampaignName(campaign.name);
+            }
           });
       });
   }, [offerSlug, campaignSlug]);
@@ -432,7 +447,7 @@ export default function CampaignDashboardPage() {
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-500 font-mono">{offerSlug}</span>
             <span className="text-gray-700">/</span>
-            <h1 className="text-sm font-semibold text-white truncate">{campaignSlug}</h1>
+            <h1 className="text-sm font-semibold text-white truncate">{campaignName ?? campaignSlug}</h1>
           </div>
         </div>
         <button
@@ -483,6 +498,7 @@ export default function CampaignDashboardPage() {
               statusData={statusData}
               runningSkill={runningSkill}
               onRunSkill={runSkill}
+              recentRuns={skillRuns}
             />
 
             {/* Live log panel */}
@@ -498,6 +514,7 @@ export default function CampaignDashboardPage() {
                   isRunning={isRunning}
                   exitCode={exitCode}
                   logEndRef={logEndRef}
+                  skillName={runningSkill ? SKILL_NAMES[runningSkill] : undefined}
                 />
               </div>
             )}
@@ -584,14 +601,15 @@ export default function CampaignDashboardPage() {
                   }}
                   className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-white text-xs font-medium transition-colors"
                 >
-                  Export CSV
+                  Export {leads.length.toLocaleString()} (CSV)
                 </button>
               )}
             </div>
 
             {leadsLoading ? (
-              <div className="flex items-center justify-center h-48 text-gray-500 text-sm gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+              <div className="flex flex-col items-center justify-center py-20 gap-3 text-neutral-500">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                <span className="text-sm">Loading leads…</span>
               </div>
             ) : leads.length === 0 ? (
               <div className="border border-dashed border-neutral-700 rounded-xl p-12 text-center">
@@ -705,8 +723,9 @@ export default function CampaignDashboardPage() {
             </div>
 
             {variantsLoading ? (
-              <div className="flex items-center justify-center h-48 text-gray-500 text-sm gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" /> Loading variants…
+              <div className="flex flex-col items-center justify-center py-20 gap-3 text-neutral-500">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                <span className="text-sm">Loading copy variants…</span>
               </div>
             ) : variants.length === 0 ? (
               <div className="border border-dashed border-neutral-700 rounded-xl p-12 text-center">
@@ -793,8 +812,9 @@ export default function CampaignDashboardPage() {
             </div>
 
             {metricsLoading ? (
-              <div className="flex items-center justify-center h-48 text-gray-500 text-sm gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" /> Loading results…
+              <div className="flex flex-col items-center justify-center py-20 gap-3 text-neutral-500">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                <span className="text-sm">Loading results…</span>
               </div>
             ) : metrics ? (
               <div className="space-y-4">

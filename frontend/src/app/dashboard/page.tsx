@@ -302,15 +302,19 @@ export default function DashboardPage() {
             </div>
 
             {campaignsLoading ? (
-              <div className="flex items-center justify-center py-12 text-neutral-600">
+              <div className="flex flex-col items-center justify-center py-12 gap-2 text-neutral-600">
                 <Loader2 className="h-5 w-5 animate-spin" />
+                <span className="text-xs">Loading campaigns…</span>
               </div>
             ) : campaigns.length === 0 ? (
-              <div className="py-12 text-center text-neutral-500 text-sm">
-                No campaigns yet.{" "}
-                <Link href="/dashboard/offers" className="text-indigo-400 hover:underline">
-                  Create one →
-                </Link>
+              <div className="py-14 text-center">
+                <Target className="h-8 w-8 text-neutral-700 mx-auto mb-3" />
+                <p className="text-neutral-400 text-sm font-medium">No campaigns yet</p>
+                <p className="text-neutral-600 text-xs mt-1">
+                  <Link href="/dashboard/offers" className="text-indigo-400 hover:underline">
+                    Create your first offer →
+                  </Link>
+                </p>
               </div>
             ) : (
               <table className="w-full text-sm">
@@ -385,12 +389,17 @@ export default function DashboardPage() {
           </div>
 
           {runsLoading ? (
-            <div className="flex items-center justify-center py-12 text-neutral-600">
+            <div className="flex flex-col items-center justify-center py-12 gap-2 text-neutral-600">
               <Loader2 className="h-5 w-5 animate-spin" />
+              <span className="text-xs">Loading activity…</span>
             </div>
           ) : runs.length === 0 ? (
-            <div className="py-10 text-center text-neutral-600 text-xs">
-              No skill runs yet. Execute a skill to see activity here.
+            <div className="py-14 text-center">
+              <Zap className="h-8 w-8 text-neutral-700 mx-auto mb-3" />
+              <p className="text-neutral-400 text-sm font-medium">No activity yet</p>
+              <p className="text-neutral-600 text-xs mt-1">
+                Run a skill from the Pipeline tab to see activity here.
+              </p>
             </div>
           ) : (
             <ul className="divide-y divide-neutral-800/60">

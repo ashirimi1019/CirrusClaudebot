@@ -12,18 +12,25 @@ export interface StatusData {
   skill6: boolean;
 }
 
+export interface SkillRunSummary {
+  skill_number: number;
+  started_at: string;
+  status: string;
+}
+
 interface StepDef {
   skillNum: number;
   title: string;
   description: string;
   cost?: string;
+  outputLabel?: string;
 }
 
 const STEPS: StepDef[] = [
   {
     skillNum: 1,
     title: 'New Offer',
-    description: 'Define positioning canvas (13 sections)',
+    description: 'Define positioning canvas — ICP, value prop, differentiators',
     cost: 'Free',
   },
   {
@@ -41,7 +48,7 @@ const STEPS: StepDef[] = [
   {
     skillNum: 4,
     title: 'Find Leads',
-    description: 'Search Apollo.io for companies + decision-makers',
+    description: 'Search Apollo.io for matching companies + decision-makers',
     cost: '~$2–5',
   },
   {
@@ -53,7 +60,7 @@ const STEPS: StepDef[] = [
   {
     skillNum: 6,
     title: 'Campaign Review',
-    description: 'Analyze results and update learnings',
+    description: 'Analyze results, calculate rates, update learnings file',
     cost: 'Free',
   },
 ];
@@ -62,31 +69,41 @@ interface PipelineStepperProps {
   statusData: StatusData | null;
   runningSkill: number | null;
   onRunSkill: (skillNum: number) => void;
+  recentRuns?: SkillRunSummary[];
 }
 
 export function PipelineStepper({
   statusData,
   runningSkill,
   onRunSkill,
+  recentRuns = [],
 }: PipelineStepperProps) {
   function getStatus(skillNum: number): SkillStatus {
     if (runningSkill === skillNum) return 'running';
-
     const isDone = statusData?.[`skill${skillNum}` as keyof StatusData] ?? false;
     if (isDone) return 'done';
-
-    // Skill 1 is always ready (no prerequisites)
     if (skillNum === 1) return 'ready';
-
-    // Otherwise check if previous skill is done
     const prevDone = statusData?.[`skill${skillNum - 1}` as keyof StatusData] ?? false;
     return prevDone ? 'ready' : 'locked';
   }
 
+  // Find the first step that is 'ready' to highlight as next
+  const nextReadySkill = STEPS.find((s) => getStatus(s.skillNum) === 'ready')?.skillNum ?? null;
+
+  // Get last run timestamp per skill
+  function getLastRunAt(skillNum: number): string | null {
+    const runs = recentRuns.filter((r) => r.skill_number === skillNum && r.status === 'success');
+    if (runs.length === 0) return null;
+    return runs[0].started_at;
+  }
+
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col">
       {STEPS.map((step, idx) => {
         const status = getStatus(step.skillNum);
+        const lastRunAt = getLastRunAt(step.skillNum);
+        const hasOutput = statusData?.[`skill${step.skillNum}` as keyof StatusData] ?? false;
+
         return (
           <div key={step.skillNum} className="relative">
             <SkillStepCard
@@ -97,10 +114,17 @@ export function PipelineStepper({
               status={status}
               onRun={() => onRunSkill(step.skillNum)}
               isActive={runningSkill === step.skillNum}
+              lastRunAt={lastRunAt}
+              hasOutput={hasOutput}
+              isNext={status === 'ready' && step.skillNum === nextReadySkill}
             />
             {/* Connector line between steps */}
             {idx < STEPS.length - 1 && (
-              <div className="absolute left-8 top-full h-1.5 w-0.5 bg-neutral-800 translate-x-[-0.5px]" />
+              <div
+                className={`absolute left-[27px] top-full w-px transition-colors ${
+                  status === 'done' ? 'bg-emerald-500/30 h-3' : 'bg-neutral-800 h-3'
+                }`}
+              />
             )}
           </div>
         );
