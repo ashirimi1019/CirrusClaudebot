@@ -1,6 +1,5 @@
 "use client";
 import React, { useState, useEffect } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
@@ -13,9 +12,11 @@ import {
   Settings,
   Zap,
   Briefcase,
+  Clock,
   LogOut,
 } from "lucide-react";
 import { Sidebar, SidebarBody, SidebarLink } from "@/components/ui/sidebar";
+import { UserAvatar, deriveDisplayName } from "@/components/ui/user-avatar";
 import { getUser, signOut } from "@/lib/auth";
 import { createClient } from "@/lib/supabase";
 import type { User, AuthChangeEvent, Session } from "@supabase/supabase-js";
@@ -52,6 +53,11 @@ const navLinks = [
     icon: <BarChart3 className="text-neutral-400 h-5 w-5 flex-shrink-0" />,
   },
   {
+    label: "Activity",
+    href: "/dashboard/activity",
+    icon: <Clock className="text-neutral-400 h-5 w-5 flex-shrink-0" />,
+  },
+  {
     label: "Settings",
     href: "/dashboard/settings",
     icon: <Settings className="text-neutral-400 h-5 w-5 flex-shrink-0" />,
@@ -81,23 +87,6 @@ const LogoIcon = () => (
   </Link>
 );
 
-function getInitials(name: string) {
-  return name
-    .split(" ")
-    .map((n) => n[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
-}
-
-function AvatarFallback({ name }: { name: string }) {
-  return (
-    <div className="h-7 w-7 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-semibold flex-shrink-0">
-      {getInitials(name)}
-    </div>
-  );
-}
-
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [user, setUser] = useState<User | null>(null);
@@ -122,11 +111,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     router.push("/login");
   }
 
-  const displayName =
-    user?.user_metadata?.full_name ||
-    user?.email?.split("@")[0] ||
-    "Account";
-
+  const displayName = deriveDisplayName(user);
   const avatarUrl = user?.user_metadata?.avatar_url;
 
   return (
@@ -158,16 +143,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               link={{
                 label: displayName,
                 href: "/dashboard/settings",
-                icon: avatarUrl ? (
-                  <Image
-                    src={avatarUrl}
-                    className="h-7 w-7 rounded-full flex-shrink-0 object-cover"
-                    width={28}
-                    height={28}
-                    alt="User avatar"
+                icon: (
+                  <UserAvatar
+                    avatarUrl={avatarUrl}
+                    displayName={displayName}
+                    size="sm"
                   />
-                ) : (
-                  <AvatarFallback name={displayName} />
                 ),
               }}
             />

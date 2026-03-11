@@ -3,6 +3,7 @@
  *
  * Streams skill output back to the browser via Server-Sent Events.
  * Every execution is logged to the `skill_runs` table in Supabase.
+ * Generated files are tracked in the `artifacts` table.
  *
  * Query params:
  *   skill    = 1–6 (required)
@@ -13,12 +14,16 @@
 
 import { NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { createServerClient } from '@supabase/ssr';
 import { ConsoleCapture } from '@/lib/console-capture';
 import {
   withWriteDir,
   ensureContextFiles,
   prepareInputFiles,
+  WRITE_BASE,
 } from '@/lib/vercel-paths';
+import fs from 'fs';
+import path from 'path';
 
 // Allow up to 5 minutes for Skill 4 (Apollo API calls + lead scoring)
 export const maxDuration = 300;
@@ -30,6 +35,30 @@ function getServiceClient() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
   );
+}
+
+/** Extract the authenticated user ID from request cookies (non-fatal). */
+async function getUserId(request: NextRequest): Promise<string | null> {
+  try {
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll();
+          },
+          setAll() {
+            // Route handler — no response cookies needed
+          },
+        },
+      },
+    );
+    const { data: { user } } = await supabase.auth.getUser();
+    return user?.id ?? null;
+  } catch {
+    return null;
+  }
 }
 
 async function resolveIds(
@@ -64,6 +93,104 @@ async function resolveIds(
   return { offerId, campaignId };
 }
 
+// ─── Artifact definitions per skill ──────────────────────────────────────────
+
+type ArtifactDef = {
+  relPath: string;   // relative to offers/{offer}/...
+  fileName: string;
+  fileType: string;
+  category: string;
+};
+
+function getSkillArtifacts(
+  skill: number,
+  offer: string,
+  campaign: string,
+): ArtifactDef[] {
+  const offerBase = `offers/${offer}`;
+  const campaignBase = `${offerBase}/campaigns/${campaign}`;
+
+  switch (skill) {
+    case 1:
+      return [
+        { relPath: `${offerBase}/positioning.md`, fileName: 'positioning.md', fileType: 'md', category: 'positioning' },
+      ];
+    case 2:
+      return [
+        { relPath: `${campaignBase}/strategy.md`, fileName: 'strategy.md', fileType: 'md', category: 'strategy' },
+      ];
+    case 3:
+      return [
+        { relPath: `${campaignBase}/copy/email-variants.md`, fileName: 'email-variants.md', fileType: 'md', category: 'copy' },
+        { relPath: `${campaignBase}/copy/linkedin-variants.md`, fileName: 'linkedin-variants.md', fileType: 'md', category: 'copy' },
+        { relPath: `${campaignBase}/copy/personalization-notes.md`, fileName: 'personalization-notes.md', fileType: 'md', category: 'copy' },
+      ];
+    case 4:
+      return [
+        { relPath: `${campaignBase}/leads/all_leads.csv`, fileName: 'all_leads.csv', fileType: 'csv', category: 'leads' },
+      ];
+    case 5:
+      return [
+        { relPath: `${campaignBase}/outreach/messages.csv`, fileName: 'messages.csv', fileType: 'csv', category: 'outreach' },
+      ];
+    case 6:
+      return [
+        { relPath: `${campaignBase}/results/learnings.md`, fileName: 'learnings.md', fileType: 'md', category: 'results' },
+      ];
+    default:
+      return [];
+  }
+}
+
+async function recordArtifacts(
+  sb: ReturnType<typeof getServiceClient>,
+  skill: number,
+  offer: string,
+  campaign: string,
+  runId: string | null,
+  offerId: string | null,
+  campaignId: string | null,
+  userId: string | null,
+): Promise<void> {
+  const defs = getSkillArtifacts(skill, offer, campaign);
+  const rows = [];
+
+  for (const def of defs) {
+    const fullPath = path.join(WRITE_BASE, def.relPath);
+    let fileSize: number | null = null;
+    try {
+      const stat = fs.statSync(fullPath);
+      fileSize = stat.size;
+    } catch {
+      // File might not exist if skill didn't produce it — skip
+      continue;
+    }
+
+    rows.push({
+      skill_run_id: runId,
+      skill_number: skill,
+      offer_id: offerId,
+      campaign_id: campaignId,
+      user_id: userId,
+      file_path: def.relPath,
+      file_type: def.fileType,
+      file_name: def.fileName,
+      category: def.category,
+      file_size_bytes: fileSize,
+    });
+  }
+
+  if (rows.length > 0) {
+    try {
+      await sb.from('artifacts').insert(rows);
+    } catch {
+      // Non-fatal: artifact tracking failure should not break anything
+    }
+  }
+}
+
+// ─── Main handler ────────────────────────────────────────────────────────────
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const skillParam = searchParams.get('skill');
@@ -85,6 +212,9 @@ export async function GET(request: NextRequest) {
       /* ignore malformed JSON */
     }
   }
+
+  // Extract authenticated user (non-fatal — anonymous runs still work)
+  const userId = await getUserId(request);
 
   const encoder = new TextEncoder();
 
@@ -124,6 +254,7 @@ export async function GET(request: NextRequest) {
             status: 'running',
             offer_id: offerId,
             campaign_id: campaignId,
+            user_id: userId,
             started_at: new Date(startedAt).toISOString(),
           })
           .select('id')
@@ -149,6 +280,11 @@ export async function GET(request: NextRequest) {
             .eq('id', runId);
         } catch {
           /* Non-fatal */
+        }
+
+        // Record artifacts on success
+        if (exitCode === 0) {
+          await recordArtifacts(sb, skill, offer, campaign, runId, offerId, campaignId, userId);
         }
       };
 

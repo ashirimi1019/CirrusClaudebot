@@ -19,6 +19,9 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Download,
+  FileText,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { PipelineStepper, StatusData } from '@/components/ui/pipeline-stepper';
 import { LogPanel } from '@/components/ui/log-panel';
@@ -67,6 +70,16 @@ interface CampaignMetrics {
   total_meetings: number;
   reply_rate: number | null;
   meeting_rate: number | null;
+}
+
+interface Artifact {
+  id: string;
+  skill_number: number;
+  file_name: string;
+  file_type: string;
+  category: string;
+  file_size_bytes: number | null;
+  created_at: string;
 }
 
 // ─── Skill name map ───────────────────────────────────────────────────────────
@@ -242,6 +255,75 @@ function SkillRunRow({ run }: { run: SkillRun }) {
   );
 }
 
+// ─── Artifact downloads ──────────────────────────────────────────────────────
+
+function formatBytes(bytes: number | null): string {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function ArtifactDownloads({
+  artifacts,
+  loading,
+  skillFilter,
+}: {
+  artifacts: Artifact[];
+  loading: boolean;
+  skillFilter?: number[];
+}) {
+  const filtered = skillFilter
+    ? artifacts.filter((a) => skillFilter.includes(a.skill_number))
+    : artifacts;
+
+  if (loading) return null;
+  if (filtered.length === 0) return null;
+
+  return (
+    <div className="mt-6 pt-4 border-t border-neutral-800/60">
+      <h4 className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-2">
+        Generated Files
+      </h4>
+      <div className="space-y-1.5">
+        {filtered.map((art) => {
+          const Icon = art.file_type === 'csv' ? FileSpreadsheet : FileText;
+          return (
+            <div
+              key={art.id}
+              className="flex items-center justify-between gap-3 bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <Icon className="h-3.5 w-3.5 text-neutral-500 flex-shrink-0" />
+                <span className="text-xs text-neutral-300 truncate">
+                  {art.file_name}
+                </span>
+                <span className="text-xs text-neutral-600">
+                  Skill {art.skill_number}: {SKILL_NAMES[art.skill_number] ?? 'Unknown'}
+                </span>
+                {art.file_size_bytes && (
+                  <span className="text-xs text-neutral-600">
+                    ({formatBytes(art.file_size_bytes)})
+                  </span>
+                )}
+              </div>
+              <a
+                href={`/api/artifacts/${art.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors flex-shrink-0"
+              >
+                <Download className="h-3 w-3" />
+                Download
+              </a>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function CampaignDashboardPage() {
@@ -269,6 +351,10 @@ export default function CampaignDashboardPage() {
   // Run history
   const [skillRuns, setSkillRuns] = useState<SkillRun[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
+
+  // Artifacts
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [artifactsLoading, setArtifactsLoading] = useState(false);
 
   const { logs, isRunning, exitCode, runningSkill, runSkill, logEndRef } =
     useCampaignSkillRunner(offerSlug, campaignSlug);
@@ -432,6 +518,39 @@ export default function CampaignDashboardPage() {
       });
   }, [activeTab, campaignId]);
 
+  // ── Fetch artifacts ────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!campaignId) return;
+    setArtifactsLoading(true);
+    const supabase = createClient();
+    supabase
+      .from('artifacts')
+      .select('id, skill_number, file_name, file_type, category, file_size_bytes, created_at')
+      .eq('campaign_id', campaignId)
+      .order('created_at', { ascending: false })
+      .limit(100)
+      .then(({ data }: { data: Artifact[] | null }) => {
+        setArtifacts(data ?? []);
+        setArtifactsLoading(false);
+      });
+  }, [campaignId]);
+
+  // Refresh artifacts when a skill finishes
+  useEffect(() => {
+    if (!isRunning && exitCode !== null && campaignId) {
+      const supabase = createClient();
+      supabase
+        .from('artifacts')
+        .select('id, skill_number, file_name, file_type, category, file_size_bytes, created_at')
+        .eq('campaign_id', campaignId)
+        .order('created_at', { ascending: false })
+        .limit(100)
+        .then(({ data }: { data: Artifact[] | null }) => {
+          setArtifacts(data ?? []);
+        });
+    }
+  }, [isRunning, exitCode, campaignId]);
+
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full">
@@ -559,6 +678,9 @@ export default function CampaignDashboardPage() {
                 </div>
               )}
             </div>
+
+            {/* All generated files */}
+            <ArtifactDownloads artifacts={artifacts} loading={artifactsLoading} />
           </div>
         )}
 
@@ -709,6 +831,9 @@ export default function CampaignDashboardPage() {
                 </table>
               </div>
             )}
+
+            {/* Lead-related artifacts (Skill 4 CSV) */}
+            <ArtifactDownloads artifacts={artifacts} loading={artifactsLoading} skillFilter={[4]} />
           </div>
         )}
 
@@ -798,6 +923,9 @@ export default function CampaignDashboardPage() {
                 })}
               </div>
             )}
+
+            {/* Copy-related artifacts (Skill 3 files) */}
+            <ArtifactDownloads artifacts={artifacts} loading={artifactsLoading} skillFilter={[3]} />
           </div>
         )}
 
@@ -872,6 +1000,9 @@ export default function CampaignDashboardPage() {
                 </p>
               </div>
             )}
+
+            {/* Outreach & review artifacts (Skills 5 & 6) */}
+            <ArtifactDownloads artifacts={artifacts} loading={artifactsLoading} skillFilter={[5, 6]} />
           </div>
         )}
       </div>

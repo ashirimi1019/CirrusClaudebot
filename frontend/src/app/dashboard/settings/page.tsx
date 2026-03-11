@@ -1,11 +1,11 @@
 "use client";
 import React, { useState, useEffect } from "react";
-import Image from "next/image";
 import {
   Settings, Database, Globe, Check, X,
   Zap, BarChart3, FileSpreadsheet, Shield, Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { UserAvatar, deriveDisplayName } from "@/components/ui/user-avatar";
 import { getUser } from "@/lib/auth";
 import type { User } from "@supabase/supabase-js";
 
@@ -53,30 +53,6 @@ const integrations: Integration[] = [
   },
 ];
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function getInitials(name: string): string {
-  return name
-    .split(" ")
-    .map((n) => n[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
-}
-
-function deriveDisplayName(user: User | null): string {
-  if (!user) return "Account";
-  if (user.user_metadata?.full_name) return user.user_metadata.full_name;
-  if (user.email) {
-    const local = user.email.split("@")[0];
-    return local
-      .split(/[._-]/)
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(" ");
-  }
-  return "Account";
-}
-
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -113,19 +89,7 @@ export default function SettingsPage() {
           </div>
         ) : (
           <div className="p-5 flex items-center gap-4">
-            {avatarUrl ? (
-              <Image
-                src={avatarUrl}
-                className="h-12 w-12 rounded-full flex-shrink-0 object-cover border border-neutral-700"
-                width={48}
-                height={48}
-                alt="User avatar"
-              />
-            ) : (
-              <div className="h-12 w-12 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold text-lg flex-shrink-0">
-                {getInitials(displayName)}
-              </div>
-            )}
+            <UserAvatar avatarUrl={avatarUrl} displayName={displayName} size="md" />
             <div className="min-w-0">
               <div className="text-white font-medium truncate">{displayName}</div>
               {email && (
