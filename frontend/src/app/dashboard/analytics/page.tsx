@@ -7,23 +7,23 @@ import {
 import { createClient } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
+type CampaignMetric = {
+  total_companies: number;
+  total_contacts: number;
+  total_messages: number;
+  total_replies: number;
+  total_meetings: number;
+  reply_rate: number | null;
+  meeting_rate: number | null;
+  created_at: string;
+};
+
 type CampaignWithMetrics = {
   id: string;
   name: string;
   slug: string;
   created_at: string;
-  campaign_metrics: {
-    emails_sent: number;
-    emails_opened: number;
-    replies_total: number;
-    replies_positive: number;
-    bounces: number;
-    meetings_booked: number;
-    open_rate: number;
-    reply_rate: number;
-    bounce_rate: number;
-    measured_at: string;
-  }[];
+  campaign_metrics: CampaignMetric[];
 };
 
 type ApiLog = {
@@ -34,13 +34,8 @@ type ApiLog = {
 
 type FunnelStep = { label: string; value: number; pct: number; color: string };
 
-function pct(n: number | null | undefined, total: number) {
-  if (!n || !total) return "0%";
-  return ((n / total) * 100).toFixed(1) + "%";
-}
-
-function MetricCard({ label, value, trend, icon: Icon, color, sub }: {
-  label: string; value: string; trend?: string; positive?: boolean; icon: React.ElementType; color: string; sub?: string;
+function MetricCard({ label, value, icon: Icon, color, sub }: {
+  label: string; value: string; icon: React.ElementType; color: string; sub?: string;
 }) {
   return (
     <div className="rounded-xl bg-neutral-900 border border-neutral-800 p-5 flex flex-col gap-3">
@@ -51,9 +46,7 @@ function MetricCard({ label, value, trend, icon: Icon, color, sub }: {
         </div>
       </div>
       <div className="text-2xl font-bold text-white">{value}</div>
-      {(trend || sub) && (
-        <div className="text-xs text-neutral-500">{trend || sub}</div>
-      )}
+      {sub && <div className="text-xs text-neutral-500">{sub}</div>}
     </div>
   );
 }
@@ -61,7 +54,7 @@ function MetricCard({ label, value, trend, icon: Icon, color, sub }: {
 function FunnelBar({ steps }: { steps: FunnelStep[] }) {
   return (
     <div className="space-y-3">
-      {steps.map((step, i) => (
+      {steps.map((step) => (
         <div key={step.label}>
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-sm text-neutral-300">{step.label}</span>
@@ -94,38 +87,33 @@ export default function AnalyticsPage() {
       supabase.from("tool_usage").select("tool, status_code, created_at").order("created_at", { ascending: false }).limit(500),
       supabase.from("companies").select("id", { count: "exact", head: true }),
       supabase.from("contacts").select("id", { count: "exact", head: true }),
-    ]).then(([c, logs, comp, buyers]) => {
+    ]).then(([c, logs, comp, contacts]) => {
       if (c.data) setCampaigns(c.data as CampaignWithMetrics[]);
       if (logs.data) setApiLogs(logs.data as ApiLog[]);
       setCompaniesCount(comp.count ?? 0);
-      setContactsCount(buyers.count ?? 0);
+      setContactsCount(contacts.count ?? 0);
       setLoading(false);
     });
   }, []);
 
-  // Aggregate metrics across all campaigns
-  const totalSent = campaigns.reduce((s, c) => s + (c.campaign_metrics?.[0]?.emails_sent ?? 0), 0);
-  const totalOpened = campaigns.reduce((s, c) => s + (c.campaign_metrics?.[0]?.emails_opened ?? 0), 0);
-  const totalReplies = campaigns.reduce((s, c) => s + (c.campaign_metrics?.[0]?.replies_total ?? 0), 0);
-  const totalPositive = campaigns.reduce((s, c) => s + (c.campaign_metrics?.[0]?.replies_positive ?? 0), 0);
-  const totalBounces = campaigns.reduce((s, c) => s + (c.campaign_metrics?.[0]?.bounces ?? 0), 0);
-  const totalMeetings = campaigns.reduce((s, c) => s + (c.campaign_metrics?.[0]?.meetings_booked ?? 0), 0);
+  // Aggregate metrics across all campaigns using correct DB field names
+  const totalMessages = campaigns.reduce((s, c) => s + (c.campaign_metrics?.[0]?.total_messages ?? 0), 0);
+  const totalReplies = campaigns.reduce((s, c) => s + (c.campaign_metrics?.[0]?.total_replies ?? 0), 0);
+  const totalMeetings = campaigns.reduce((s, c) => s + (c.campaign_metrics?.[0]?.total_meetings ?? 0), 0);
 
-  const overallOpenRate = totalSent ? totalOpened / totalSent : 0;
-  const overallReplyRate = totalSent ? totalReplies / totalSent : 0;
-  const overallBounceRate = totalSent ? totalBounces / totalSent : 0;
+  const overallReplyRate = totalMessages ? totalReplies / totalMessages : 0;
+  const overallMeetingRate = totalReplies ? totalMeetings / totalReplies : 0;
 
   // API cost estimate
   const apiCallsByTool: Record<string, number> = {};
   apiLogs.forEach((l) => { apiCallsByTool[l.tool] = (apiCallsByTool[l.tool] ?? 0) + 1; });
 
-  // Funnel
+  // Funnel (using fields that exist in DB)
   const funnelSteps: FunnelStep[] = [
     { label: "Companies discovered", value: companiesCount, pct: 100, color: "bg-indigo-500" },
     { label: "Decision-makers found", value: contactsCount, pct: companiesCount ? (contactsCount / companiesCount) * 100 : 0, color: "bg-violet-500" },
-    { label: "Emails sent", value: totalSent, pct: contactsCount ? (totalSent / contactsCount) * 100 : 0, color: "bg-blue-500" },
-    { label: "Emails opened", value: totalOpened, pct: totalSent ? (totalOpened / totalSent) * 100 : 0, color: "bg-cyan-500" },
-    { label: "Replies received", value: totalReplies, pct: totalSent ? (totalReplies / totalSent) * 100 : 0, color: "bg-emerald-500" },
+    { label: "Messages sent", value: totalMessages, pct: contactsCount ? (totalMessages / contactsCount) * 100 : 0, color: "bg-blue-500" },
+    { label: "Replies received", value: totalReplies, pct: totalMessages ? (totalReplies / totalMessages) * 100 : 0, color: "bg-emerald-500" },
     { label: "Meetings booked", value: totalMeetings, pct: totalReplies ? (totalMeetings / totalReplies) * 100 : 0, color: "bg-amber-500" },
   ];
 
@@ -147,21 +135,21 @@ export default function AnalyticsPage() {
 
       {/* KPI row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <MetricCard label="Emails Sent" value={totalSent.toLocaleString() || "0"} icon={Mail} color="bg-indigo-500/20" />
-        <MetricCard label="Open Rate" value={totalSent ? (overallOpenRate * 100).toFixed(1) + "%" : "—"} icon={BarChart3} color="bg-violet-500/20" />
-        <MetricCard label="Reply Rate" value={totalSent ? (overallReplyRate * 100).toFixed(1) + "%" : "—"} icon={MessageSquare} color="bg-emerald-500/20" />
+        <MetricCard label="Messages Sent" value={totalMessages.toLocaleString() || "0"} icon={Mail} color="bg-indigo-500/20" />
+        <MetricCard label="Reply Rate" value={totalMessages ? (overallReplyRate * 100).toFixed(1) + "%" : "—"} icon={MessageSquare} color="bg-emerald-500/20" />
         <MetricCard label="Meetings Booked" value={totalMeetings.toString()} icon={Users} color="bg-rose-500/20" />
+        <MetricCard label="Companies Found" value={companiesCount.toLocaleString()} icon={Building2} color="bg-violet-500/20" />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6 mb-6">
         {/* Funnel */}
         <div className="rounded-xl bg-neutral-900 border border-neutral-800 p-6">
           <h2 className="text-sm font-semibold text-white mb-6">Pipeline Funnel</h2>
-          {companiesCount === 0 && contactsCount === 0 && totalSent === 0 ? (
+          {companiesCount === 0 && contactsCount === 0 && totalMessages === 0 ? (
             <div className="py-8 text-center">
               <Target className="h-8 w-8 text-neutral-700 mx-auto mb-3" />
               <p className="text-neutral-500 text-sm">No pipeline data yet.</p>
-              <p className="text-neutral-600 text-xs mt-1">Run Skills 4 & 5 to generate funnel data.</p>
+              <p className="text-neutral-600 text-xs mt-1">Run Skills 4 &amp; 5 to generate funnel data.</p>
             </div>
           ) : (
             <FunnelBar steps={funnelSteps} />
@@ -182,7 +170,7 @@ export default function AnalyticsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-neutral-800">
-                  {["Campaign", "Sent", "Open %", "Reply %", "Meetings"].map((h) => (
+                  {["Campaign", "Sent", "Replies", "Reply %", "Meetings"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs text-neutral-500 font-medium">{h}</th>
                   ))}
                 </tr>
@@ -193,12 +181,8 @@ export default function AnalyticsPage() {
                   return (
                     <tr key={c.id} className="border-b border-neutral-800/60 last:border-0 hover:bg-white/[0.02]">
                       <td className="px-4 py-3 text-neutral-300 text-xs max-w-[160px] truncate">{c.name}</td>
-                      <td className="px-4 py-3 text-neutral-400 text-xs">{m?.emails_sent?.toLocaleString() ?? "—"}</td>
-                      <td className="px-4 py-3 text-xs">
-                        {m?.open_rate ? (
-                          <span className="text-indigo-400">{(m.open_rate * 100).toFixed(1)}%</span>
-                        ) : <span className="text-neutral-600">—</span>}
-                      </td>
+                      <td className="px-4 py-3 text-neutral-400 text-xs">{m?.total_messages?.toLocaleString() ?? "—"}</td>
+                      <td className="px-4 py-3 text-neutral-400 text-xs">{m?.total_replies?.toLocaleString() ?? "—"}</td>
                       <td className="px-4 py-3 text-xs">
                         {m?.reply_rate ? (
                           <span className={m.reply_rate >= 0.05 ? "text-emerald-400" : "text-amber-400"}>
@@ -207,9 +191,9 @@ export default function AnalyticsPage() {
                         ) : <span className="text-neutral-600">—</span>}
                       </td>
                       <td className="px-4 py-3 text-xs">
-                        {m?.meetings_booked ? (
+                        {m?.total_meetings ? (
                           <span className="text-emerald-400 flex items-center gap-0.5">
-                            {m.meetings_booked} <ArrowUpRight className="h-3 w-3" />
+                            {m.total_meetings} <ArrowUpRight className="h-3 w-3" />
                           </span>
                         ) : <span className="text-neutral-600">—</span>}
                       </td>

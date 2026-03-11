@@ -2,11 +2,22 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  Target, Plus, ChevronRight, Circle, CheckCircle2, AlertCircle,
-  ArrowUpRight, Mail, Users, TrendingUp, Calendar, Loader2,
+  Target, Plus, Circle, CheckCircle2, AlertCircle,
+  ArrowUpRight, Mail, Users, TrendingUp, Calendar, Loader2, ChevronRight,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
+
+type CampaignMetric = {
+  total_companies: number;
+  total_contacts: number;
+  total_messages: number;
+  total_replies: number;
+  total_meetings: number;
+  reply_rate: number | null;
+  meeting_rate: number | null;
+  created_at: string;
+};
 
 type Campaign = {
   id: string;
@@ -16,23 +27,14 @@ type Campaign = {
   strategy: Record<string, string> | null;
   created_at: string;
   campaign_metrics: CampaignMetric[];
-};
-
-type CampaignMetric = {
-  emails_sent: number;
-  emails_opened: number;
-  replies_total: number;
-  open_rate: number;
-  reply_rate: number;
-  meetings_booked: number;
-  measured_at: string;
+  offers: { slug: string } | null;
 };
 
 function deriveStatus(c: Campaign): "active" | "complete" | "draft" {
   if (!c.campaign_metrics?.length) return "draft";
   const m = c.campaign_metrics[0];
-  if (!m.emails_sent) return "draft";
-  const daysSince = (Date.now() - new Date(m.measured_at).getTime()) / 86400000;
+  if (!m.total_messages) return "draft";
+  const daysSince = (Date.now() - new Date(m.created_at).getTime()) / 86400000;
   return daysSince > 21 ? "complete" : "active";
 }
 
@@ -56,7 +58,7 @@ export default function CampaignsPage() {
     const supabase = createClient();
     supabase
       .from("campaigns")
-      .select("*, campaign_metrics(*)")
+      .select("*, campaign_metrics(*), offers(slug)")
       .order("created_at", { ascending: false })
       .then(({ data }: { data: Campaign[] | null }) => {
         if (data) setCampaigns(data as Campaign[]);
@@ -68,8 +70,8 @@ export default function CampaignsPage() {
     filter === "all" ? true : deriveStatus(c) === filter
   );
 
-  const totalSent = campaigns.reduce((sum, c) => sum + (c.campaign_metrics?.[0]?.emails_sent ?? 0), 0);
-  const totalMeetings = campaigns.reduce((sum, c) => sum + (c.campaign_metrics?.[0]?.meetings_booked ?? 0), 0);
+  const totalSent = campaigns.reduce((sum, c) => sum + (c.campaign_metrics?.[0]?.total_messages ?? 0), 0);
+  const totalMeetings = campaigns.reduce((sum, c) => sum + (c.campaign_metrics?.[0]?.total_meetings ?? 0), 0);
   const avgReply = campaigns.length
     ? campaigns.reduce((sum, c) => sum + (c.campaign_metrics?.[0]?.reply_rate ?? 0), 0) / campaigns.length
     : 0;
@@ -92,7 +94,7 @@ export default function CampaignsPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {[
           { label: "Total Campaigns", value: campaigns.length.toString(), icon: Target, color: "bg-indigo-500/20" },
-          { label: "Emails Sent", value: totalSent.toLocaleString() || "—", icon: Mail, color: "bg-violet-500/20" },
+          { label: "Messages Sent", value: totalSent.toLocaleString() || "—", icon: Mail, color: "bg-violet-500/20" },
           { label: "Avg Reply Rate", value: avgReply ? pct(avgReply) : "—", icon: TrendingUp, color: "bg-emerald-500/20" },
           { label: "Meetings Booked", value: totalMeetings.toString() || "—", icon: Users, color: "bg-rose-500/20" },
         ].map(({ label, value, icon: Icon, color }) => (
@@ -135,13 +137,13 @@ export default function CampaignsPage() {
           <div className="py-20 text-center">
             <Target className="h-8 w-8 text-neutral-700 mx-auto mb-3" />
             <p className="text-neutral-500 text-sm">No campaigns yet.</p>
-            <p className="text-neutral-600 text-xs mt-1">Run <code className="text-indigo-400">npm run skill:2</code> to create one.</p>
+            <p className="text-neutral-600 text-xs mt-1">Create one via <Link href="/dashboard/offers" className="text-indigo-400 hover:underline">Offers</Link>.</p>
           </div>
         ) : (
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-neutral-800">
-                {["Campaign", "Status", "Sent", "Open Rate", "Reply Rate", "Meetings", "Created"].map((h) => (
+                {["Campaign", "Status", "Sent", "Contacts", "Reply Rate", "Meetings", "Created", ""].map((h) => (
                   <th key={h} className="px-5 py-3 text-left text-xs text-neutral-500 font-medium">{h}</th>
                 ))}
               </tr>
@@ -151,6 +153,9 @@ export default function CampaignsPage() {
                 const status = deriveStatus(c);
                 const s = statusConfig[status];
                 const m = c.campaign_metrics?.[0];
+                const href = c.offers?.slug
+                  ? `/dashboard/offers/${c.offers.slug}/campaigns/${c.slug}`
+                  : null;
                 return (
                   <tr key={c.id} className="border-b border-neutral-800/60 last:border-0 hover:bg-white/[0.02] transition-colors group">
                     <td className="px-5 py-4">
@@ -163,13 +168,13 @@ export default function CampaignsPage() {
                         {s.label}
                       </span>
                     </td>
-                    <td className="px-5 py-4 text-neutral-300">{m?.emails_sent?.toLocaleString() ?? "—"}</td>
-                    <td className="px-5 py-4 text-neutral-300">{pct(m?.open_rate)}</td>
+                    <td className="px-5 py-4 text-neutral-300">{m?.total_messages?.toLocaleString() ?? "—"}</td>
+                    <td className="px-5 py-4 text-neutral-300">{m?.total_contacts?.toLocaleString() ?? "—"}</td>
                     <td className="px-5 py-4 text-neutral-300">{pct(m?.reply_rate)}</td>
                     <td className="px-5 py-4">
-                      {m?.meetings_booked ? (
+                      {m?.total_meetings ? (
                         <span className="inline-flex items-center gap-1 text-emerald-400">
-                          {m.meetings_booked} <ArrowUpRight className="h-3 w-3" />
+                          {m.total_meetings} <ArrowUpRight className="h-3 w-3" />
                         </span>
                       ) : <span className="text-neutral-600">—</span>}
                     </td>
@@ -178,6 +183,16 @@ export default function CampaignsPage() {
                         <Calendar className="h-3 w-3" />
                         {new Date(c.created_at).toLocaleDateString()}
                       </span>
+                    </td>
+                    <td className="px-5 py-4">
+                      {href && (
+                        <Link
+                          href={href}
+                          className="inline-flex items-center gap-1 text-xs text-neutral-600 hover:text-indigo-400 transition-colors opacity-0 group-hover:opacity-100"
+                        >
+                          Open <ChevronRight className="h-3 w-3" />
+                        </Link>
+                      )}
                     </td>
                   </tr>
                 );
