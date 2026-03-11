@@ -153,7 +153,7 @@ export function SkillStepCard({
       {onRun && (
         <button
           onClick={onRun}
-          disabled={!canRun || status === 'running'}
+          disabled={status === 'locked' || status === 'running'}
           className={`flex-shrink-0 px-3.5 py-1.5 text-xs font-medium rounded-lg border transition-all min-w-[68px] text-center ${
             status === 'running'
               ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 cursor-wait'
