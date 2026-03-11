@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createServerClient } from '@supabase/ssr';
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Always allow auth callback through
@@ -8,22 +9,39 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Check for Supabase auth token in cookies
-  const hasSession = request.cookies.getAll().some(
-    (c) => c.name.startsWith('sb-') && c.name.endsWith('-auth-token')
+  const response = NextResponse.next({ request });
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            request.cookies.set(name, value);
+            response.cookies.set(name, value, options);
+          });
+        },
+      },
+    }
   );
 
+  const { data: { user } } = await supabase.auth.getUser();
+
   // Redirect unauthenticated users away from /dashboard
-  if (pathname.startsWith('/dashboard') && !hasSession) {
+  if (pathname.startsWith('/dashboard') && !user) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
 
   // Redirect authenticated users away from /login and /signup
-  if ((pathname === '/login' || pathname === '/signup') && hasSession) {
+  if ((pathname === '/login' || pathname === '/signup') && user) {
     return NextResponse.redirect(new URL('/dashboard', request.url));
   }
 
-  return NextResponse.next();
+  return response;
 }
 
 export const config = {
