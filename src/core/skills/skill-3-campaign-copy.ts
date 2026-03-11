@@ -10,6 +10,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { generateDraft } from '../../lib/clients/openai.ts';
 import { getSupabaseClient } from '../../lib/supabase.ts';
+import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
+import { validateSkillInputs } from '../../lib/services/validation.ts';
 import readline from 'readline';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -38,9 +40,12 @@ function readFile(filePath: string): string {
 }
 
 export async function runSkill3CampaignCopy(): Promise<void> {
-  console.log('\n========================================');
-  console.log('SKILL 3: CAMPAIGN COPY GENERATION');
-  console.log('========================================\n');
+  const tracker = new SkillRunTracker('SKILL 3: CAMPAIGN COPY GENERATION');
+  tracker.step('Validate inputs');
+  tracker.step('Generate email variants');
+  tracker.step('Generate LinkedIn variants');
+  tracker.step('Write copy files');
+  tracker.step('Save to database');
 
   let offerSlug: string;
   let campaignSlug: string;
@@ -50,169 +55,120 @@ export async function runSkill3CampaignCopy(): Promise<void> {
   if (process.argv[2] && process.argv[3]) {
     offerSlug = process.argv[2];
     campaignSlug = process.argv[3];
-    console.log(`✅ Using command line arguments:`);
     console.log(`  Offer: ${offerSlug}`);
-    console.log(`  Campaign: ${campaignSlug}\n`);
+    console.log(`  Campaign: ${campaignSlug}`);
   } else {
     // Fall back to interactive mode
     rl = createReadlineInterface();
-
-    // Get inputs
     offerSlug = await prompt(rl, 'Enter offer slug (e.g., "talent-as-service-us"): ');
     campaignSlug = await prompt(rl, 'Enter campaign slug (e.g., "hiring-data-engineers"): ');
-
     rl.close();
+    rl = null;
   }
 
-  try {
+  // ─── Step 1: Validate inputs ───
+  tracker.startStep('Validate inputs');
+  const validation = validateSkillInputs({
+    offerSlug,
+    campaignSlug,
+    requirePositioning: true,
+    requireStrategy: true,
+  });
+  if (!validation.valid) {
+    tracker.failStep('Validate inputs', validation.errors.join('; '));
+    tracker.printSummary();
+    throw new Error(`Skill 3 input validation failed:\n  ${validation.errors.join('\n  ')}`);
+  }
+  tracker.completeStep('Validate inputs', `offer="${offerSlug}", campaign="${campaignSlug}"`);
 
-    console.log('\n📖 Reading files...');
+  // Read positioning and strategy
+  const positioningPath = path.join(process.cwd(), 'offers', offerSlug, 'positioning.md');
+  const strategyPath = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlug, 'strategy.md');
+  const positioning = readFile(positioningPath);
+  const strategy = readFile(strategyPath);
 
-    // Read positioning and strategy
-    const positioningPath = path.join(process.cwd(), 'offers', offerSlug, 'positioning.md');
-    const strategyPath = path.join(
-      process.cwd(),
-      'offers',
-      offerSlug,
-      'campaigns',
-      campaignSlug,
-      'strategy.md'
-    );
+  // Copy + results directories
+  const copyDir = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlug, 'copy');
+  fs.mkdirSync(copyDir, { recursive: true });
+  const resultsDir = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlug, 'results');
+  fs.mkdirSync(resultsDir, { recursive: true });
 
-    const positioning = readFile(positioningPath);
-    const strategy = readFile(strategyPath);
+  // ─── Step 2: Generate email variants ───
+  tracker.startStep('Generate email variants');
+  const emailVariants: Array<{ name: string; subject: string; body: string }> = [];
+  let emailFailures = 0;
 
-    console.log('✅ Files loaded');
-    console.log('\n🤖 Generating copy variants...\n');
-
-    // Copy directory
-    const copyDir = path.join(
-      process.cwd(),
-      'offers',
-      offerSlug,
-      'campaigns',
-      campaignSlug,
-      'copy'
-    );
-    fs.mkdirSync(copyDir, { recursive: true });
-
-    // Results directory (for Skill 6 output)
-    const resultsDir = path.join(
-      process.cwd(),
-      'offers',
-      offerSlug,
-      'campaigns',
-      campaignSlug,
-      'results'
-    );
-    fs.mkdirSync(resultsDir, { recursive: true });
-
-    // Generate email variants
-    console.log('📧 Generating email variants...');
-    const emailVariants: Array<{ name: string; subject: string; body: string }> = [];
-
-    for (let i = 1; i <= 3; i++) {
-      const angle = getEmailAngle(i);
-      const prompt = buildEmailPrompt(positioning, strategy, angle);
-
-      try {
-        const draft = await generateDraft({
-          companyName: '[Company Name]',
-          buyerFirstName: '[First Name]',
-          buyerTitle: '[Title]',
-          evidenceTitle: extractSignalFromStrategy(strategy),
-          jobUrl: undefined,
-        });
-
-        emailVariants.push({
-          name: `email-variant-${i}`,
-          subject: draft.subject,
-          body: draft.body,
-        });
-
-        console.log(`✅ Email variant ${i} generated`);
-      } catch (err) {
-        console.error(`❌ Error generating email ${i}:`, err);
-      }
+  for (let i = 1; i <= 3; i++) {
+    const angle = getEmailAngle(i);
+    try {
+      const draft = await generateDraft({
+        companyName: '[Company Name]',
+        buyerFirstName: '[First Name]',
+        buyerTitle: '[Title]',
+        evidenceTitle: extractSignalFromStrategy(strategy),
+        jobUrl: undefined,
+      });
+      emailVariants.push({ name: `email-variant-${i}`, subject: draft.subject, body: draft.body });
+      console.log(`  ✅ Email variant ${i} generated (angle: ${angle})`);
+    } catch (err: any) {
+      emailFailures++;
+      tracker.warn(`Email variant ${i} generation failed: ${err.message}`);
     }
+  }
 
-    // Save email variants as consolidated markdown
-    const emailMdLines: string[] = [
-      `# Email Variants`,
-      ``,
-      `**Offer:** ${offerSlug}`,
-      `**Campaign:** ${campaignSlug}`,
-      `**Generated:** ${new Date().toISOString()}`,
-      ``,
-      `---`,
-      ``,
-    ];
-    emailVariants.forEach((variant, idx) => {
-      emailMdLines.push(`## Variant ${idx + 1}`);
-      emailMdLines.push(``);
-      emailMdLines.push(`**Subject:** ${variant.subject}`);
-      emailMdLines.push(``);
-      emailMdLines.push(variant.body);
-      emailMdLines.push(``);
-      emailMdLines.push(`---`);
-      emailMdLines.push(``);
-    });
-    const emailMdPath = path.join(copyDir, 'email-variants.md');
-    fs.writeFileSync(emailMdPath, emailMdLines.join('\n'));
-    console.log(`💾 Saved ${emailMdPath}`);
+  if (emailVariants.length === 0) {
+    tracker.failStep('Generate email variants', 'All 3 email variants failed to generate');
+    tracker.printSummary();
+    throw new Error('Skill 3: Could not generate any email variants. Check OPENAI_API_KEY and credits.');
+  } else if (emailFailures > 0) {
+    tracker.partialStep('Generate email variants', `${emailVariants.length}/3 generated, ${emailFailures} failed`, emailVariants.length);
+  } else {
+    tracker.completeStep('Generate email variants', `${emailVariants.length} variants`, emailVariants.length);
+  }
 
-    // Also save individual .txt files (required by Skill 5)
-    emailVariants.forEach((variant, idx) => {
-      const txtPath = path.join(copyDir, `email-variant-${idx + 1}.txt`);
-      const txtContent = `---\nSubject: ${variant.subject}\n\n${variant.body}\n---`;
-      fs.writeFileSync(txtPath, txtContent);
-    });
+  // ─── Step 3: Generate LinkedIn variants ───
+  tracker.startStep('Generate LinkedIn variants');
+  const linkedinVariants = [
+    { name: 'linkedin-variant-1', content: generateLinkedInMessage1(positioning, strategy) },
+    { name: 'linkedin-variant-2', content: generateLinkedInMessage2(positioning, strategy) },
+    { name: 'linkedin-variant-3', content: generateLinkedInMessage3(positioning, strategy) },
+  ];
+  tracker.completeStep('Generate LinkedIn variants', '3 variants (template-based)', 3);
 
-    // Generate LinkedIn variants
-    console.log('\n💼 Generating LinkedIn variants...');
-    const linkedinVariants = [
-      {
-        name: 'linkedin-variant-1',
-        content: generateLinkedInMessage1(positioning, strategy),
-      },
-      {
-        name: 'linkedin-variant-2',
-        content: generateLinkedInMessage2(positioning, strategy),
-      },
-      {
-        name: 'linkedin-variant-3',
-        content: generateLinkedInMessage3(positioning, strategy),
-      },
-    ];
+  // ─── Step 4: Write copy files ───
+  tracker.startStep('Write copy files');
 
-    // Save LinkedIn variants as consolidated markdown
-    const linkedinMdLines: string[] = [
-      `# LinkedIn Variants`,
-      ``,
-      `**Offer:** ${offerSlug}`,
-      `**Campaign:** ${campaignSlug}`,
-      `**Generated:** ${new Date().toISOString()}`,
-      ``,
-      `> **INSTRUCTIONS:** Manual sending only — never automate LinkedIn.`,
-      `> Wait 2-3 days after connecting before sending. Max 5-10 per day. Vary slightly — no copy-paste.`,
-      ``,
-      `---`,
-      ``,
-    ];
-    linkedinVariants.forEach((variant, idx) => {
-      linkedinMdLines.push(`## Variant ${idx + 1}`);
-      linkedinMdLines.push(``);
-      linkedinMdLines.push(variant.content);
-      linkedinMdLines.push(``);
-      linkedinMdLines.push(`---`);
-      linkedinMdLines.push(``);
-    });
-    const linkedinMdPath = path.join(copyDir, 'linkedin-variants.md');
-    fs.writeFileSync(linkedinMdPath, linkedinMdLines.join('\n'));
-    console.log(`💾 Saved ${linkedinMdPath}`);
+  // Email markdown
+  const emailMdLines: string[] = [
+    `# Email Variants`, ``, `**Offer:** ${offerSlug}`, `**Campaign:** ${campaignSlug}`,
+    `**Generated:** ${new Date().toISOString()}`, ``, `---`, ``,
+  ];
+  emailVariants.forEach((variant, idx) => {
+    emailMdLines.push(`## Variant ${idx + 1}`, ``, `**Subject:** ${variant.subject}`, ``, variant.body, ``, `---`, ``);
+  });
+  fs.writeFileSync(path.join(copyDir, 'email-variants.md'), emailMdLines.join('\n'));
 
-    // Save personalization notes
-    const personalizationNotes = `# Personalization Notes
+  // Individual .txt files (required by Skill 5)
+  emailVariants.forEach((variant, idx) => {
+    const txtContent = `---\nSubject: ${variant.subject}\n\n${variant.body}\n---`;
+    fs.writeFileSync(path.join(copyDir, `email-variant-${idx + 1}.txt`), txtContent);
+  });
+
+  // LinkedIn markdown
+  const linkedinMdLines: string[] = [
+    `# LinkedIn Variants`, ``, `**Offer:** ${offerSlug}`, `**Campaign:** ${campaignSlug}`,
+    `**Generated:** ${new Date().toISOString()}`, ``,
+    `> **INSTRUCTIONS:** Manual sending only — never automate LinkedIn.`,
+    `> Wait 2-3 days after connecting before sending. Max 5-10 per day. Vary slightly — no copy-paste.`,
+    ``, `---`, ``,
+  ];
+  linkedinVariants.forEach((variant, idx) => {
+    linkedinMdLines.push(`## Variant ${idx + 1}`, ``, variant.content, ``, `---`, ``);
+  });
+  fs.writeFileSync(path.join(copyDir, 'linkedin-variants.md'), linkedinMdLines.join('\n'));
+
+  // Personalization notes
+  const personalizationNotes = `# Personalization Notes
 
 **Offer:** ${offerSlug}
 **Campaign:** ${campaignSlug}
@@ -238,69 +194,58 @@ export async function runSkill3CampaignCopy(): Promise<void> {
 - Double-check [role plural] — auto-pluralization handles common cases (Engineer→Engineers, etc.)
 - Subject lines with personalization outperform generic subject lines
 `;
-    const notesPath = path.join(copyDir, 'personalization-notes.md');
-    fs.writeFileSync(notesPath, personalizationNotes);
-    console.log(`💾 Saved ${notesPath}`);
+  fs.writeFileSync(path.join(copyDir, 'personalization-notes.md'), personalizationNotes);
 
-    // Save to database
-    const sb = getSupabaseClient();
+  tracker.completeStep('Write copy files', `${copyDir} (${emailVariants.length} email .txt + .md, linkedin .md, notes .md)`);
 
-    // First get the offer_id
-    const { data: offerData, error: offerError } = await sb
-      .from('offers')
-      .select('id')
-      .eq('slug', offerSlug)
-      .single();
+  // ─── Step 5: Save to database ───
+  tracker.startStep('Save to database');
+  const sb = getSupabaseClient();
 
-    if (offerError || !offerData) {
-      console.error('❌ Failed to find offer:', offerError?.message);
-      process.exit(1);
-    }
+  const { data: offerData, error: offerError } = await sb
+    .from('offers').select('id').eq('slug', offerSlug).single();
 
-    // Then get campaign scoped to this offer
+  if (offerError || !offerData) {
+    tracker.partialStep('Save to database', `Offer not found in DB: ${offerError?.message || 'no row'}. Copy files saved but not DB records.`);
+    tracker.warn('Run Skill 1 with DB save first if the offer is not in the database.');
+  } else {
     const { data: campaign, error: campaignError } = await sb
-      .from('campaigns')
-      .select('id')
-      .eq('offer_id', offerData.id)
-      .eq('slug', campaignSlug)
-      .single();
+      .from('campaigns').select('id').eq('offer_id', offerData.id).eq('slug', campaignSlug).single();
 
-    if (!campaignError && campaign) {
-      // Save email variants to database
-      await Promise.all(
-        emailVariants.map((variant, idx) =>
-          sb.from('message_variants').insert({
-            campaign_id: campaign.id,
-            variant_name: `email-${idx + 1}`,
-            channel: 'email',
-            subject_line: variant.subject,
-            body: variant.body,
-          })
-        )
-      );
-
-      console.log('\n✅ Saved to database');
+    if (campaignError || !campaign) {
+      tracker.partialStep('Save to database', `Campaign not found in DB: ${campaignError?.message || 'no row'}. Copy files saved but not DB records.`);
+      tracker.warn('Run Skill 2 with DB save first if the campaign is not in the database.');
     } else {
-      console.error('❌ Failed to find campaign:', campaignError?.message);
-    }
+      // Save each variant individually so partial failures are visible
+      let dbSaved = 0;
+      let dbFailed = 0;
+      for (let idx = 0; idx < emailVariants.length; idx++) {
+        const variant = emailVariants[idx];
+        const { error: insertErr } = await sb.from('message_variants').insert({
+          campaign_id: campaign.id,
+          variant_name: `email-${idx + 1}`,
+          channel: 'email',
+          subject_line: variant.subject,
+          body: variant.body,
+        });
+        if (insertErr) {
+          dbFailed++;
+          tracker.warn(`DB insert failed for email-${idx + 1}: ${insertErr.message}`);
+        } else {
+          dbSaved++;
+        }
+      }
 
-    console.log('\n========================================');
-    console.log('✅ SKILL 3 COMPLETE');
-    console.log('========================================');
-    console.log(`\nCopy variants ready in: ${copyDir}`);
-    console.log('📧 email-variants.md (3 variants)');
-    console.log('💼 linkedin-variants.md (3 variants)');
-    console.log('📝 personalization-notes.md');
-    console.log(`\nResults folder created: ${resultsDir}`);
-    console.log(`\nNext step: Run Skill 4 to find leads for this campaign`);
-    console.log(`Command: npm run skill:4 -- ${offerSlug} ${campaignSlug}`);
-  } catch (err) {
-    console.error('❌ Error:', err);
-    if (rl) {
-      rl.close();
+      if (dbFailed > 0) {
+        tracker.partialStep('Save to database', `${dbSaved} saved, ${dbFailed} failed`);
+      } else {
+        tracker.completeStep('Save to database', `${dbSaved} email variants saved to message_variants`, dbSaved);
+      }
     }
-    process.exit(1);
   }
+
+  tracker.printSummary();
+  console.log(`Next: npm run skill:4 -- ${offerSlug} ${campaignSlug}`);
 }
 
 // Helper functions

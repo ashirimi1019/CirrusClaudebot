@@ -9,6 +9,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getSupabaseClient } from '../../lib/supabase.ts';
+import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
+import { validateSkillInputs } from '../../lib/services/validation.ts';
 import readline from 'readline';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -61,28 +63,70 @@ async function readPositioning(offerSlug: string): Promise<string> {
  * Returns the campaign slug.
  */
 export async function runSkill2CampaignStrategy(offerSlug?: string, config?: CampaignConfig): Promise<string> {
-  console.log('\n========================================');
-  console.log('SKILL 2: CAMPAIGN STRATEGY');
-  console.log('========================================\n');
+  const tracker = new SkillRunTracker('SKILL 2: CAMPAIGN STRATEGY');
+  tracker.step('Validate inputs');
+  tracker.step('Gather strategy input');
+  tracker.step('Write strategy.md');
+  tracker.step('Save to database');
 
   let input: CampaignStrategyInput;
 
+  // ─── Step 1: Validate ───
+  tracker.startStep('Validate inputs');
+
   if (offerSlug && config) {
     // ── AUTOMATED MODE ──
+    if (!config.name || config.name.trim() === '') {
+      tracker.failStep('Validate inputs', 'config.name is required but was empty');
+      tracker.printSummary();
+      throw new Error('Skill 2: config.name is required. Provide a non-empty campaign name.');
+    }
+    const validation = validateSkillInputs({ offerSlug, requirePositioning: true });
+    if (!validation.valid) {
+      tracker.failStep('Validate inputs', validation.errors.join('; '));
+      tracker.printSummary();
+      throw new Error(`Skill 2 input validation failed:\n  ${validation.errors.join('\n  ')}`);
+    }
+    tracker.completeStep('Validate inputs', `offer="${offerSlug}"`);
+
+    // ── Step 2: Gather input (config mode) ──
+    tracker.startStep('Gather strategy input');
     console.log(`📋 Config mode: offer="${offerSlug}", campaign="${config.name}"`);
-    await readPositioning(offerSlug); // validate positioning exists
     const campaignSlug = generateSlug(config.name);
     input = { ...config, offerSlug, campaignName: config.name, campaignSlug };
+    tracker.completeStep('Gather strategy input', `campaign="${campaignSlug}"`);
   } else {
+    tracker.completeStep('Validate inputs', 'Interactive mode — will validate after prompt');
+
     // ── INTERACTIVE MODE ──
+    tracker.startStep('Gather strategy input');
     const rl = createReadlineInterface();
     try {
       const resolvedOfferSlug = offerSlug || await prompt(rl, 'Enter offer slug: ');
-      console.log('\n📖 Reading positioning...');
-      await readPositioning(resolvedOfferSlug);
+      if (!resolvedOfferSlug) {
+        rl.close();
+        tracker.failStep('Gather strategy input', 'Offer slug cannot be empty');
+        tracker.printSummary();
+        throw new Error('Skill 2: Offer slug is required.');
+      }
+
+      // Validate positioning exists
+      const validation = validateSkillInputs({ offerSlug: resolvedOfferSlug, requirePositioning: true });
+      if (!validation.valid) {
+        rl.close();
+        tracker.failStep('Gather strategy input', validation.errors.join('; '));
+        tracker.printSummary();
+        throw new Error(`Skill 2 input validation failed:\n  ${validation.errors.join('\n  ')}`);
+      }
       console.log('✅ Positioning loaded\n');
 
       const campaignName = await prompt(rl, 'Campaign name (e.g., "Hiring Data Engineers - Q1"): ');
+      if (!campaignName) {
+        rl.close();
+        tracker.failStep('Gather strategy input', 'Campaign name cannot be empty');
+        tracker.printSummary();
+        throw new Error('Skill 2: Campaign name is required.');
+      }
       const campaignSlug = generateSlug(campaignName);
       console.log(`\n✅ Campaign slug: ${campaignSlug}`);
       console.log('\nLet\'s design your signal strategy.\n');
@@ -105,25 +149,35 @@ export async function runSkill2CampaignStrategy(offerSlug?: string, config?: Cam
         expectedFit: await prompt(rl, '11. Expected fit % (e.g., "60% will match ICP"): '),
       };
       rl.close();
+      tracker.completeStep('Gather strategy input', `campaign="${input.campaignSlug}"`);
     } catch (err) {
       rl.close();
       throw err;
     }
   }
 
-  // Create campaign directory
+  // ─── Step 3: Write strategy file ───
+  tracker.startStep('Write strategy.md');
   const campaignDir = path.join(process.cwd(), 'offers', input.offerSlug, 'campaigns', input.campaignSlug);
   fs.mkdirSync(path.join(campaignDir, 'copy'), { recursive: true });
 
   const strategyPath = path.join(campaignDir, 'strategy.md');
   fs.writeFileSync(strategyPath, generateStrategyMarkdown(input));
-  console.log(`✅ Strategy saved: ${strategyPath}`);
+  tracker.completeStep('Write strategy.md', strategyPath);
 
-  // Save to database
+  // ─── Step 4: Save to database ───
+  tracker.startStep('Save to database');
   const sb = getSupabaseClient();
-  const { data: offer } = await sb.from('offers').select('id').eq('slug', input.offerSlug).single();
+  const { data: offer, error: offerLookupErr } = await sb
+    .from('offers')
+    .select('id')
+    .eq('slug', input.offerSlug)
+    .single();
 
-  if (offer) {
+  if (offerLookupErr || !offer) {
+    tracker.partialStep('Save to database', `Offer "${input.offerSlug}" not found in DB (${offerLookupErr?.message || 'no row'}). Strategy file saved, but no DB record.`);
+    tracker.warn('Run Skill 1 first if this offer has not been saved to the database.');
+  } else {
     const { error } = await sb.from('campaigns').upsert(
       {
         offer_id: offer.id,
@@ -139,16 +193,14 @@ export async function runSkill2CampaignStrategy(offerSlug?: string, config?: Cam
       { onConflict: 'offer_id,slug' }
     );
     if (error) {
-      console.warn(`⚠️ Database warning: ${error.message}`);
+      tracker.partialStep('Save to database', `DB upsert warning: ${error.message}`);
     } else {
-      console.log('✅ Saved to database');
+      tracker.completeStep('Save to database', 'Upserted campaign record');
     }
   }
 
-  console.log('\n========================================');
-  console.log('✅ SKILL 2 COMPLETE');
-  console.log('========================================');
-  console.log(`\nNext: npm run skill:3 -- ${input.offerSlug} ${input.campaignSlug}`);
+  tracker.printSummary();
+  console.log(`Next: npm run skill:3 -- ${input.offerSlug} ${input.campaignSlug}`);
 
   return input.campaignSlug;
 }

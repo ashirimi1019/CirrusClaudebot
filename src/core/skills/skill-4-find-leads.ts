@@ -18,6 +18,9 @@ import {
 import { upsertCompany } from '../../lib/db/companies.ts';
 import { insertEvidence } from '../../lib/db/evidence.ts';
 import { upsertContact } from '../../lib/db/contacts.ts';
+import { scoreCompany, ICP_THRESHOLD } from '../../lib/services/scoring.ts';
+import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
+import { validateSkillInputs } from '../../lib/services/validation.ts';
 import readline from 'readline';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -77,48 +80,17 @@ function parseStrategy(strategy: string): { roles: string[]; geography: string[]
   return { roles: defaultRoles, geography };
 }
 
-// ICP scoring (from icp-framework.md)
-// Companies from Apollo mixed_companies/search already pass employee range + job title filters
-// so they automatically get base points for hiring signal + size qualification
-function scoreCompanyAgainstICP(company: ApolloCompany): number {
-  let score = 0;
-
-  // Active hiring signal (already detected by job title search) = 100 pts
-  score += 100;
-
-  // Company size — if we searched with employee range filters, these companies already qualify
-  // The search API may not return the actual count, so give credit for passing the filter
-  const size = company.employee_count || company.estimated_num_employees || 0;
-  if (size >= 50 && size <= 1000) score += 50;
-  else if (size > 1000 && size <= 5000) score += 30;
-  else if (size === 0) {
-    // Size unknown but company passed the employee range filter in the API call
-    score += 40;
-  }
-
-  // Funding stage or public company
-  if (company.funding_stage && company.funding_stage !== 'unfunded') score += 30;
-
-  // Revenue (available from mixed_companies/search)
-  const revenue = (company as any).revenue || 0;
-  if (revenue > 10_000_000) score += 20;  // $10M+ revenue is a good sign
-
-  // Tech keywords (cloud, data, engineering)
-  const techKeywords = ['aws', 'cloud', 'data', 'machine learning', 'saas', 'api', 'platform'];
-  const companyKeywords = (company.keywords || []).join(' ').toLowerCase();
-  if (techKeywords.some((k) => companyKeywords.includes(k))) score += 20;
-
-  // Has a domain (basic data quality check)
-  if (company.website_url || (company as any).primary_domain) score += 10;
-
-  return score;
-}
+// NOTE: ICP scoring moved to shared service at src/lib/services/scoring.ts
+// Uses scoreCompany(company) which returns { total, qualifies, ... }
 
 export async function runSkill4FindLeads(): Promise<void> {
-  console.log('\n========================================');
-  console.log('SKILL 4: FIND LEADS (via Apollo.io)');
-  console.log('⚠️  WARNING: This skill uses Apollo API credits!');
-  console.log('========================================\n');
+  const tracker = new SkillRunTracker('SKILL 4: FIND LEADS (via Apollo.io)');
+  tracker.step('Validate inputs');
+  tracker.step('Search companies (Apollo)');
+  tracker.step('Score against ICP');
+  tracker.step('Find decision-makers');
+  tracker.step('Store in database');
+  tracker.step('Write all_leads.csv');
 
   let offerSlug: string;
   let campaignSlug: string;
@@ -127,9 +99,8 @@ export async function runSkill4FindLeads(): Promise<void> {
   if (process.argv[2] && process.argv[3]) {
     offerSlug = process.argv[2];
     campaignSlug = process.argv[3];
-    console.log(`✅ Using command line arguments:`);
     console.log(`  Offer: ${offerSlug}`);
-    console.log(`  Campaign: ${campaignSlug}\n`);
+    console.log(`  Campaign: ${campaignSlug}`);
   } else {
     rl = createReadlineInterface();
     offerSlug = await prompt(rl, 'Enter offer slug: ');
@@ -141,207 +112,222 @@ export async function runSkill4FindLeads(): Promise<void> {
       return;
     }
     rl.close();
+    rl = null;
   }
 
-  try {
-    // Read strategy
-    const strategyPath = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlug, 'strategy.md');
-    const strategy = readFile(strategyPath);
-    const { roles, geography } = parseStrategy(strategy);
+  // ─── Step 1: Validate inputs ───
+  tracker.startStep('Validate inputs');
+  const validation = validateSkillInputs({
+    offerSlug,
+    campaignSlug,
+    requireStrategy: true,
+  });
+  if (!validation.valid) {
+    tracker.failStep('Validate inputs', validation.errors.join('; '));
+    tracker.printSummary();
+    throw new Error(`Skill 4 input validation failed:\n  ${validation.errors.join('\n  ')}`);
+  }
 
-    console.log('📍 Parsed from strategy:');
-    console.log(`  Roles: ${roles.slice(0, 3).join(', ')}... (+${roles.length - 3} more)`);
-    console.log(`  Geography: ${geography.join(', ')}\n`);
+  const strategyPath = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlug, 'strategy.md');
+  const strategy = readFile(strategyPath);
+  const { roles, geography } = parseStrategy(strategy);
+  tracker.completeStep('Validate inputs', `${roles.length} roles, geography: ${geography.join(', ')}`);
 
-    // Create leads directory
-    const leadsDir = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlug, 'leads');
-    fs.mkdirSync(leadsDir, { recursive: true });
+  // Create leads directory
+  const leadsDir = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlug, 'leads');
+  fs.mkdirSync(leadsDir, { recursive: true });
 
-    // ─── STEP 1: Find companies with hiring signals via Apollo ───
-    console.log('🔍 Searching Apollo for companies hiring engineering talent...\n');
+  // ─── Step 2: Search companies via Apollo ───
+  tracker.startStep('Search companies (Apollo)');
 
-    // Search in batches of roles (Apollo keyword search)
-    const allCompanies: ApolloCompany[] = [];
-    const seenIds = new Set<string>();
+  const allCompanies: ApolloCompany[] = [];
+  const seenIds = new Set<string>();
+  let searchFailures = 0;
 
-    // Split into batches of 3 roles for more targeted searches
-    const ROLE_BATCH_SIZE = 3;
-    for (let i = 0; i < roles.length; i += ROLE_BATCH_SIZE) {
-      const roleBatch = roles.slice(i, i + ROLE_BATCH_SIZE);
-      try {
-        const companies = await searchCompaniesByHiringRoles(
-          roleBatch,
-          geography,
-          ICP_EMPLOYEE_RANGES,
-          25
-        );
-        for (const c of companies) {
-          if (!seenIds.has(c.id)) {
-            seenIds.add(c.id);
-            allCompanies.push(c);
-          }
+  const ROLE_BATCH_SIZE = 3;
+  for (let i = 0; i < roles.length; i += ROLE_BATCH_SIZE) {
+    const roleBatch = roles.slice(i, i + ROLE_BATCH_SIZE);
+    try {
+      const companies = await searchCompaniesByHiringRoles(roleBatch, geography, ICP_EMPLOYEE_RANGES, 25);
+      for (const c of companies) {
+        if (!seenIds.has(c.id)) {
+          seenIds.add(c.id);
+          allCompanies.push(c);
         }
-      } catch (err: any) {
-        console.warn(`  ⚠️ Search failed for [${roleBatch.join(', ')}]: ${err.message}`);
       }
+    } catch (err: any) {
+      searchFailures++;
+      tracker.warn(`Search failed for [${roleBatch.join(', ')}]: ${err.message}`);
     }
+  }
 
-    console.log(`\n✅ Total unique companies found: ${allCompanies.length}`);
+  if (allCompanies.length === 0) {
+    tracker.failStep('Search companies (Apollo)', `0 companies found (${searchFailures} search failures). Check APOLLO_API_KEY and account plan.`);
+    tracker.printSummary();
+    return;
+  }
+  if (searchFailures > 0) {
+    tracker.partialStep('Search companies (Apollo)', `${allCompanies.length} unique companies, ${searchFailures} batch failures`, allCompanies.length);
+  } else {
+    tracker.completeStep('Search companies (Apollo)', `${allCompanies.length} unique companies`, allCompanies.length);
+  }
 
-    if (allCompanies.length === 0) {
-      console.log('\n⚠️  No companies found. Check your APOLLO_API_KEY and account plan.');
-      return;
-    }
+  // ─── Step 3: Score against ICP (using shared scoring service) ───
+  tracker.startStep('Score against ICP');
+  const qualifyingCompanies = allCompanies.filter((c) => {
+    const score = scoreCompany(c);
+    return score.qualifies;
+  });
 
-    // ─── STEP 2: Score + filter against ICP ───
-    console.log('\n📊 Scoring companies against ICP (threshold: 170 pts)...');
-    const qualifyingCompanies = allCompanies.filter((c) => {
-      const score = scoreCompanyAgainstICP(c);
-      return score >= 170;
-    });
+  if (qualifyingCompanies.length === 0) {
+    tracker.warn(`0/${allCompanies.length} companies met ICP threshold (${ICP_THRESHOLD}). Consider relaxing filters.`);
+    tracker.partialStep('Score against ICP', `0/${allCompanies.length} qualify — threshold may be too strict`, 0);
+  } else {
+    tracker.completeStep('Score against ICP', `${qualifyingCompanies.length}/${allCompanies.length} qualify (≥${ICP_THRESHOLD})`, qualifyingCompanies.length);
+  }
 
-    console.log(`✅ ${qualifyingCompanies.length} / ${allCompanies.length} companies qualify (score ≥ 170)`);
+  // ─── Step 4: Find decision-makers + Step 5: Store in DB ───
+  tracker.startStep('Find decision-makers');
+  tracker.startStep('Store in database');
 
-    // ─── STEP 3: Find decision-makers + store in DB ───
-    console.log('\n👥 Finding decision-makers at qualifying companies...\n');
+  const companiesOutput: any[] = [];
+  const contactsOutput: any[] = [];
+  let dbCompanyFails = 0;
+  let dbContactFails = 0;
+  let dmSearchFails = 0;
 
-    const companiesOutput: any[] = [];
-    const contactsOutput: any[] = [];
+  for (const company of qualifyingCompanies) {
+    const score = scoreCompany(company);
+    const primaryDomain = (company as any).primary_domain;
+    const domain = primaryDomain
+      ? primaryDomain
+      : company.website_url
+        ? company.website_url.replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '')
+        : `${company.name.toLowerCase().replace(/\s+/g, '')}.com`;
 
-    for (const company of qualifyingCompanies) {
-      const score = scoreCompanyAgainstICP(company);
-      const primaryDomain = (company as any).primary_domain;
-      const domain = primaryDomain
-        ? primaryDomain
-        : company.website_url
-          ? company.website_url.replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '')
-          : `${company.name.toLowerCase().replace(/\s+/g, '')}.com`;
+    console.log(`  📝 ${company.name} (score: ${score.total}, ~${company.employee_count || '?'} employees)`);
 
-      console.log(`📝 ${company.name} (score: ${score}, ~${company.employee_count || '?'} employees)`);
-
-      // Upsert company to DB
-      let dbCompany;
-      try {
-        dbCompany = await upsertCompany({
-          domain,
-          name: company.name,
-          employee_count: company.employee_count || null,
-          funding_stage: company.funding_stage || null,
-          industry: company.industry || null,
-          country: company.country || geography[0] || 'US',
-          fit_score: score,
-        });
-      } catch (err: any) {
-        console.warn(`  ⚠️ Failed to upsert company: ${err.message}`);
-        continue;
-      }
-
-      // Insert evidence (hiring signal)
-      try {
-        await insertEvidence({
-          company_id: dbCompany.id,
-          type: 'job_post',
-          title: `Hiring engineering talent (detected via Apollo)`,
-          raw_json: { apollo_id: company.id, keywords: company.keywords },
-          source: 'apollo',
-          posted_at: new Date().toISOString(),
-        });
-      } catch (err: any) {
-        console.warn(`  ⚠️ Failed to insert evidence: ${err.message}`);
-      }
-
-      companiesOutput.push({
-        id: dbCompany.id,
-        apollo_id: company.id,
+    // Upsert company to DB
+    let dbCompany;
+    try {
+      dbCompany = await upsertCompany({
         domain,
         name: company.name,
-        hiring_signal: `Hiring engineering talent`,
-        fit_score: score,
-        employee_count: company.employee_count,
-        industry: company.industry,
+        employee_count: company.employee_count || null,
+        funding_stage: company.funding_stage || null,
+        industry: company.industry || null,
+        country: company.country || geography[0] || 'US',
+        fit_score: score.total,
       });
+    } catch (err: any) {
+      dbCompanyFails++;
+      tracker.warn(`Failed to upsert company "${company.name}": ${err.message}`);
+      continue;
+    }
 
-      // Find decision-makers
-      let people: ApolloPerson[] = [];
+    // Insert evidence (hiring signal) — non-fatal
+    try {
+      await insertEvidence({
+        company_id: dbCompany.id,
+        type: 'job_post',
+        title: `Hiring engineering talent (detected via Apollo)`,
+        raw_json: { apollo_id: company.id, keywords: company.keywords },
+        source: 'apollo',
+        posted_at: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      tracker.warn(`Failed to insert evidence for "${company.name}": ${err.message}`);
+    }
+
+    companiesOutput.push({
+      id: dbCompany.id, apollo_id: company.id, domain, name: company.name,
+      hiring_signal: `Hiring engineering talent`, fit_score: score.total,
+      employee_count: company.employee_count, industry: company.industry,
+    });
+
+    // Find decision-makers
+    let people: ApolloPerson[] = [];
+    try {
+      people = await searchDecisionMakers([company.id], ICP_TITLES, 5);
+      console.log(`    → Found ${people.length} decision-makers`);
+    } catch (err: any) {
+      dmSearchFails++;
+      tracker.warn(`Failed to find decision-makers at "${company.name}": ${err.message}`);
+    }
+
+    // Store contacts
+    for (const person of people) {
+      if (!person.email) continue;
+      const email = person.email.toLowerCase().trim();
       try {
-        people = await searchDecisionMakers([company.id], ICP_TITLES, 5);
-        console.log(`  → Found ${people.length} decision-makers`);
+        const buyer = await upsertContact({
+          company_id: dbCompany.id,
+          first_name: person.first_name,
+          last_name: person.last_name,
+          title: person.title || '',
+          email,
+          linkedin_url: person.linkedin_url || null,
+          apollo_contact_id: person.id || null,
+          enriched_at: new Date().toISOString(),
+        });
+        contactsOutput.push({
+          id: buyer.id, company_id: dbCompany.id, company_name: company.name,
+          company_domain: domain, hiring_signal: `Hiring engineering talent`,
+          fit_score: score.total, first_name: person.first_name, last_name: person.last_name,
+          title: person.title || '', email, linkedin_url: person.linkedin_url || '',
+        });
       } catch (err: any) {
-        console.warn(`  ⚠️ Failed to find decision-makers: ${err.message}`);
-      }
-
-      // Store buyers + build contacts list
-      for (const person of people) {
-        if (!person.email) continue;
-
-        const email = person.email.toLowerCase().trim();
-
-        try {
-          const buyer = await upsertContact({
-            company_id: dbCompany.id,
-            first_name: person.first_name,
-            last_name: person.last_name,
-            title: person.title || '',
-            email,
-            linkedin_url: person.linkedin_url || null,
-            apollo_contact_id: person.id || null,
-            enriched_at: new Date().toISOString(),
-          });
-
-          contactsOutput.push({
-            id: buyer.id,
-            company_id: dbCompany.id,
-            company_name: company.name,
-            company_domain: domain,
-            hiring_signal: `Hiring engineering talent`,
-            fit_score: score,
-            first_name: person.first_name,
-            last_name: person.last_name,
-            title: person.title || '',
-            email,
-            linkedin_url: person.linkedin_url || '',
-          });
-        } catch (err: any) {
-          console.warn(`  ⚠️ Failed to upsert buyer ${email}: ${err.message}`);
-        }
+        dbContactFails++;
+        tracker.warn(`Failed to upsert contact ${email}: ${err.message}`);
       }
     }
-
-    // ─── STEP 4: Write all_leads.csv ───
-    console.log('\n💾 Writing all_leads.csv...');
-
-    const header = 'company_name,company_domain,hiring_signal,fit_score,first_name,last_name,title,email,linkedin_url';
-
-    const rows = contactsOutput.map((c) =>
-      `"${c.company_name}","${c.company_domain}","${c.hiring_signal}","${c.fit_score}","${c.first_name}","${c.last_name}","${c.title}","${c.email}","${c.linkedin_url}"`
-    );
-
-    // Also add companies without contacts (for reference)
-    const companyIdsWithContacts = new Set(contactsOutput.map((c) => c.company_id));
-    for (const co of companiesOutput) {
-      if (!companyIdsWithContacts.has(co.id)) {
-        rows.push(`"${co.name}","${co.domain}","${co.hiring_signal}","${co.fit_score}","","","","",""`);
-      }
-    }
-
-    const csv = [header, ...rows].join('\n');
-    const allLeadsPath = path.join(leadsDir, 'all_leads.csv');
-    fs.writeFileSync(allLeadsPath, csv);
-
-    console.log('\n========================================');
-    console.log('✅ SKILL 4 COMPLETE');
-    console.log('========================================');
-    console.log(`\nResults:`);
-    console.log(`  Companies found:        ${allCompanies.length}`);
-    console.log(`  Qualifying (ICP ≥ 170): ${qualifyingCompanies.length}`);
-    console.log(`  Decision-makers found:  ${contactsOutput.length}`);
-    console.log(`\nOutput: ${allLeadsPath}`);
-    console.log(`\nNext step: npm run skill:5 -- ${offerSlug} ${campaignSlug}`);
-  } catch (err: any) {
-    console.error('❌ Error:', err.message || err);
-    if (rl) rl.close();
-    process.exit(1);
   }
+
+  // Complete decision-makers step
+  if (dmSearchFails > 0 && contactsOutput.length > 0) {
+    tracker.partialStep('Find decision-makers', `${contactsOutput.length} contacts found, ${dmSearchFails} company lookups failed`, contactsOutput.length);
+  } else if (contactsOutput.length === 0 && qualifyingCompanies.length > 0) {
+    tracker.partialStep('Find decision-makers', `0 contacts found across ${qualifyingCompanies.length} qualifying companies`, 0);
+  } else {
+    tracker.completeStep('Find decision-makers', `${contactsOutput.length} contacts`, contactsOutput.length);
+  }
+
+  // Complete DB step
+  if (dbCompanyFails > 0 || dbContactFails > 0) {
+    tracker.partialStep('Store in database', `${companiesOutput.length} companies, ${contactsOutput.length} contacts stored (${dbCompanyFails} company + ${dbContactFails} contact failures)`);
+  } else {
+    tracker.completeStep('Store in database', `${companiesOutput.length} companies + ${contactsOutput.length} contacts`);
+  }
+
+  // ─── Step 6: Write all_leads.csv ───
+  tracker.startStep('Write all_leads.csv');
+
+  const header = 'company_name,company_domain,hiring_signal,fit_score,first_name,last_name,title,email,linkedin_url';
+  const rows = contactsOutput.map((c) =>
+    `"${c.company_name}","${c.company_domain}","${c.hiring_signal}","${c.fit_score}","${c.first_name}","${c.last_name}","${c.title}","${c.email}","${c.linkedin_url}"`
+  );
+
+  // Add companies without contacts (for reference)
+  const companyIdsWithContacts = new Set(contactsOutput.map((c) => c.company_id));
+  let companiesWithoutContacts = 0;
+  for (const co of companiesOutput) {
+    if (!companyIdsWithContacts.has(co.id)) {
+      rows.push(`"${co.name}","${co.domain}","${co.hiring_signal}","${co.fit_score}","","","","",""`);
+      companiesWithoutContacts++;
+    }
+  }
+
+  if (companiesWithoutContacts > 0) {
+    tracker.warn(`${companiesWithoutContacts} qualifying companies had no decision-makers found — included in CSV without contact data.`);
+  }
+
+  const csv = [header, ...rows].join('\n');
+  const allLeadsPath = path.join(leadsDir, 'all_leads.csv');
+  fs.writeFileSync(allLeadsPath, csv);
+  tracker.completeStep('Write all_leads.csv', `${rows.length} rows → ${allLeadsPath}`, rows.length);
+
+  tracker.printSummary();
+  console.log(`Next: npm run skill:5 -- ${offerSlug} ${campaignSlug}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

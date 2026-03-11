@@ -11,6 +11,7 @@
 
 import axios from 'axios';
 import { getSupabaseClient } from '../supabase.ts';
+import { withRetry, isTransientError } from '../services/retry.ts';
 
 const APOLLO_BASE_URL = 'https://api.apollo.io/api/v1';
 
@@ -150,6 +151,12 @@ export async function searchCompaniesByHiringRoles(
   employeeRanges: string[] = ['11,50', '51,200', '201,500', '501,1000', '1001,5000'],
   perPage: number = 25
 ): Promise<ApolloCompany[]> {
+  // Input validation
+  if (!roles || roles.length === 0) {
+    console.warn('  ⚠️ searchCompaniesByHiringRoles called with empty roles array — returning []');
+    return [];
+  }
+
   const client = apolloClient();
 
   // Use job title search to find companies actively hiring these roles
@@ -165,38 +172,43 @@ export async function searchCompaniesByHiringRoles(
     payload.organization_locations = locations;
   }
 
-  try {
-    console.log(`  → Apollo company search: roles=[${roles.join(', ')}]`);
-    const response = await client.post('/mixed_companies/search', payload);
-    const data = response.data;
+  console.log(`  → Apollo company search: roles=[${roles.join(', ')}]`);
 
-    await logApiCall('apollo_company_search', 0.01, payload, { count: data.organizations?.length });
+  const response = await withRetry(
+    () => client.post('/mixed_companies/search', payload),
+    { label: 'apollo_company_search', maxAttempts: 3 }
+  );
+  const data = response.data;
 
-    const companies: ApolloCompany[] = (data.organizations || []).map((org: any) => ({
-      id: org.id,
-      name: org.name,
-      website_url: org.website_url || org.primary_domain ? `http://${org.primary_domain}` : null,
-      linkedin_url: org.linkedin_url || null,
-      employee_count: org.estimated_num_employees || org.num_employees || null,
-      industry: org.industry || org.sic_codes?.[0] || null,
-      city: org.city || null,
-      state: org.state || null,
-      country: org.country || null,
-      funding_stage: org.latest_funding_stage || (org.publicly_traded_symbol ? 'ipo' : null),
-      estimated_num_employees: org.estimated_num_employees || null,
-      keywords: org.keywords || org.sic_codes || [],
-      // Extra fields from mixed_companies/search
-      primary_domain: org.primary_domain || null,
-      revenue: org.organization_revenue || null,
-      founded_year: org.founded_year || null,
-    }));
+  await logApiCall('apollo_company_search', 0.01, payload, { count: data.organizations?.length });
 
-    console.log(`  ✅ Found ${companies.length} companies`);
-    return companies;
-  } catch (err: any) {
-    const msg = err.response?.data?.message || err.message;
-    throw new Error(`Apollo company search failed: ${msg}`);
+  const raw = data.organizations || [];
+  if (raw.length === 0) {
+    console.warn(`  ⚠️ Apollo returned 0 companies for roles=[${roles.join(', ')}]`);
+    return [];
   }
+
+  const companies: ApolloCompany[] = raw.map((org: any) => ({
+    id: org.id,
+    name: org.name,
+    website_url: org.website_url || org.primary_domain ? `http://${org.primary_domain}` : null,
+    linkedin_url: org.linkedin_url || null,
+    employee_count: org.estimated_num_employees || org.num_employees || null,
+    industry: org.industry || org.sic_codes?.[0] || null,
+    city: org.city || null,
+    state: org.state || null,
+    country: org.country || null,
+    funding_stage: org.latest_funding_stage || (org.publicly_traded_symbol ? 'ipo' : null),
+    estimated_num_employees: org.estimated_num_employees || null,
+    keywords: org.keywords || org.sic_codes || [],
+    // Extra fields from mixed_companies/search
+    primary_domain: org.primary_domain || null,
+    revenue: org.organization_revenue || null,
+    founded_year: org.founded_year || null,
+  }));
+
+  console.log(`  ✅ Found ${companies.length} companies`);
+  return companies;
 }
 
 // ─────────────────────────────────────────────
@@ -240,26 +252,33 @@ export async function searchDecisionMakers(
   };
 
   let candidates: any[] = [];
-  try {
-    const response = await client.post('/mixed_people/api_search', searchPayload);
-    candidates = response.data.people || [];
+  const searchResponse = await withRetry(
+    () => client.post('/mixed_people/api_search', searchPayload),
+    { label: 'apollo_people_api_search', maxAttempts: 3 }
+  );
+  candidates = searchResponse.data.people || [];
 
-    await logApiCall('apollo_people_api_search', 0.01, { org_count: organizationIds.length }, { count: candidates.length });
-  } catch (err: any) {
-    const msg = err.response?.data?.error || err.response?.data?.message || err.message;
-    throw new Error(`Apollo people search failed: ${msg}`);
+  await logApiCall('apollo_people_api_search', 0.01, { org_count: organizationIds.length }, { count: candidates.length });
+
+  if (candidates.length === 0) {
+    console.warn(`  ⚠️ Apollo returned 0 people candidates for ${organizationIds.length} organization(s)`);
+    return [];
   }
-
-  if (candidates.length === 0) return [];
 
   // Step 2: Enrich each candidate to get email + full name + linkedin
   const enriched: ApolloPerson[] = [];
+  let enrichFailures = 0;
 
   for (const candidate of candidates) {
     if (!candidate.id) continue;
 
     try {
-      const enrichResp = await client.post('/people/match', { id: candidate.id });
+      const enrichResp = await withRetry(
+        () => client.post('/people/match', { id: candidate.id }),
+        { label: `apollo_enrich_${candidate.first_name || 'unknown'}`, maxAttempts: 2, swallowOnExhaust: true }
+      );
+      if (!enrichResp) { enrichFailures++; continue; }
+
       const p = enrichResp.data.person;
 
       if (p) {
@@ -279,9 +298,13 @@ export async function searchDecisionMakers(
         await logApiCall('apollo_people_enrich', 0.03, { person_id: candidate.id }, { email: !!p.email });
       }
     } catch (err: any) {
-      // Non-fatal: skip person if enrichment fails
+      enrichFailures++;
       console.warn(`    ⚠️ Enrichment failed for ${candidate.first_name || 'unknown'}: ${err.response?.data?.error || err.message}`);
     }
+  }
+
+  if (enrichFailures > 0) {
+    console.warn(`  ⚠️ ${enrichFailures}/${candidates.length} enrichment(s) failed — ${enriched.length} enriched successfully`);
   }
 
   return enriched;
@@ -298,46 +321,52 @@ export async function searchDecisionMakers(
  */
 export async function listSequences(): Promise<ApolloSequence[]> {
   const client = apolloClient();
-  try {
-    const response = await client.post('/emailer_campaigns/search', { per_page: '50' });
-    const data = response.data;
-    return (data.emailer_campaigns || []).map((c: any) => ({
-      id: c.id,
-      name: c.name,
-      active: c.active !== false,
-      num_steps: c.num_steps || c.emailer_steps_count || 0,
-      num_contacts: c.num_contacts || c.contacts_count || 0,
-      created_at: c.created_at,
-    }));
-  } catch (err: any) {
-    const msg = err.response?.data?.error || err.response?.data?.message || err.message;
-    throw new Error(`Apollo list sequences failed: ${msg}`);
+
+  const response = await withRetry(
+    () => client.post('/emailer_campaigns/search', { per_page: '50' }),
+    { label: 'apollo_list_sequences', maxAttempts: 3 }
+  );
+  const data = response.data;
+  const sequences = (data.emailer_campaigns || []).map((c: any) => ({
+    id: c.id,
+    name: c.name,
+    active: c.active !== false,
+    num_steps: c.num_steps || c.emailer_steps_count || 0,
+    num_contacts: c.num_contacts || c.contacts_count || 0,
+    created_at: c.created_at,
+  }));
+
+  if (sequences.length === 0) {
+    console.warn('  ⚠️ No sequences found in Apollo account');
   }
+  return sequences;
 }
 
 /**
  * Create a new email sequence in Apollo.
  */
 export async function createSequence(name: string): Promise<ApolloSequence> {
-  const client = apolloClient();
-  try {
-    const response = await client.post('/emailer_campaigns', {
-      name,
-      active: true,
-    });
-    const c = response.data.emailer_campaign;
-    return {
-      id: c.id,
-      name: c.name,
-      active: c.active,
-      num_steps: 0,
-      num_contacts: 0,
-      created_at: c.created_at,
-    };
-  } catch (err: any) {
-    const msg = err.response?.data?.message || err.message;
-    throw new Error(`Apollo create sequence failed: ${msg}`);
+  if (!name || name.trim() === '') {
+    throw new Error('createSequence: sequence name is required');
   }
+  const client = apolloClient();
+
+  const response = await withRetry(
+    () => client.post('/emailer_campaigns', { name, active: true }),
+    { label: 'apollo_create_sequence', maxAttempts: 2 }
+  );
+  const c = response.data.emailer_campaign;
+  if (!c?.id) {
+    throw new Error('Apollo createSequence returned no campaign data — check API key permissions');
+  }
+  return {
+    id: c.id,
+    name: c.name,
+    active: c.active,
+    num_steps: 0,
+    num_contacts: 0,
+    created_at: c.created_at,
+  };
 }
 
 /**
@@ -352,9 +381,13 @@ export async function addEmailStepToSequence(
   dayOffset: number = 1,
   position: number = 1
 ): Promise<void> {
+  if (!sequenceId) throw new Error('addEmailStepToSequence: sequenceId is required');
+  if (!subject || !body) throw new Error('addEmailStepToSequence: subject and body are required');
+
   const client = apolloClient();
-  try {
-    await client.post('/emailer_steps', {
+
+  await withRetry(
+    () => client.post('/emailer_steps', {
       emailer_campaign_id: sequenceId,
       position,
       wait_time: Math.max(dayOffset, 1),  // Apollo requires positive integer
@@ -366,11 +399,9 @@ export async function addEmailStepToSequence(
         body_html: body.replace(/\n/g, '<br>'),
         body_text: body,
       },
-    });
-  } catch (err: any) {
-    const msg = err.response?.data?.error || err.response?.data?.message || err.message;
-    throw new Error(`Apollo add sequence step failed: ${msg}`);
-  }
+    }),
+    { label: `apollo_add_step_${position}`, maxAttempts: 2 }
+  );
 }
 
 /**
@@ -389,17 +420,21 @@ export async function bulkCreateContacts(contacts: ContactInput[]): Promise<Apol
   for (let i = 0; i < contacts.length; i += BATCH_SIZE) {
     const batch = contacts.slice(i, i + BATCH_SIZE);
 
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
     try {
-      const response = await client.post('/contacts/bulk_create', {
-        contacts: batch.map((c) => ({
-          first_name: c.first_name,
-          last_name: c.last_name,
-          email: c.email || undefined,
-          title: c.title || undefined,
-          organization_name: c.organization_name || undefined,
-          website_url: c.website_url || undefined,
-        })),
-      });
+      const response = await withRetry(
+        () => client.post('/contacts/bulk_create', {
+          contacts: batch.map((c) => ({
+            first_name: c.first_name,
+            last_name: c.last_name,
+            email: c.email || undefined,
+            title: c.title || undefined,
+            organization_name: c.organization_name || undefined,
+            website_url: c.website_url || undefined,
+          })),
+        }),
+        { label: `apollo_bulk_create_batch_${batchNum}`, maxAttempts: 2 }
+      );
 
       const data = response.data;
       // Bulk create returns { created_contacts: [...], existing_contacts: [...] }
@@ -418,10 +453,10 @@ export async function bulkCreateContacts(contacts: ContactInput[]): Promise<Apol
       }));
 
       allCreated.push(...created);
-      console.log(`  ✅ Created ${created.length} contacts (batch ${Math.floor(i / BATCH_SIZE) + 1})`);
+      console.log(`  ✅ Created ${created.length} contacts (batch ${batchNum})`);
     } catch (err: any) {
       const msg = err.response?.data?.message || err.message;
-      console.warn(`  ⚠️ Batch contact create failed: ${msg}`);
+      console.warn(`  ⚠️ Batch ${batchNum} contact create failed after retries: ${msg}`);
     }
   }
 
@@ -435,8 +470,9 @@ export async function addContactsToSequence(
   contactIds: string[],
   sequenceId: string,
   emailAccountId?: string
-): Promise<void> {
-  if (contactIds.length === 0) return;
+): Promise<{ enrolled: number; failed: number }> {
+  if (contactIds.length === 0) return { enrolled: 0, failed: 0 };
+  if (!sequenceId) throw new Error('addContactsToSequence: sequenceId is required');
 
   const client = apolloClient();
 
@@ -445,25 +481,39 @@ export async function addContactsToSequence(
   if (!sendFromId) {
     const accounts = await getEmailAccounts();
     const active = accounts.find((a) => a.active);
-    if (!active) throw new Error('No active email account found in Apollo. Connect a mailbox first.');
+    if (!active) throw new Error('No active email account found in Apollo. Connect a mailbox in Apollo Settings → Email Accounts first.');
     sendFromId = active.id;
   }
 
   // Apollo accepts up to 100 contact IDs at a time
   const BATCH_SIZE = 100;
+  let enrolled = 0;
+  let failed = 0;
+
   for (let i = 0; i < contactIds.length; i += BATCH_SIZE) {
     const batch = contactIds.slice(i, i + BATCH_SIZE);
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
     try {
-      await client.post(`/emailer_campaigns/${sequenceId}/add_contact_ids`, {
-        contact_ids: batch,
-        send_email_from_email_account_id: sendFromId,
-      });
-      console.log(`  ✅ Enrolled ${batch.length} contacts in sequence (batch ${Math.floor(i / BATCH_SIZE) + 1})`);
+      await withRetry(
+        () => client.post(`/emailer_campaigns/${sequenceId}/add_contact_ids`, {
+          contact_ids: batch,
+          send_email_from_email_account_id: sendFromId,
+        }),
+        { label: `apollo_enroll_batch_${batchNum}`, maxAttempts: 2 }
+      );
+      enrolled += batch.length;
+      console.log(`  ✅ Enrolled ${batch.length} contacts in sequence (batch ${batchNum})`);
     } catch (err: any) {
+      failed += batch.length;
       const msg = err.response?.data?.message || err.message;
-      console.warn(`  ⚠️ Sequence enrollment batch failed: ${msg}`);
+      console.warn(`  ⚠️ Sequence enrollment batch ${batchNum} failed after retries: ${msg}`);
     }
   }
+
+  if (failed > 0) {
+    console.warn(`  ⚠️ Enrollment summary: ${enrolled} enrolled, ${failed} failed`);
+  }
+  return { enrolled, failed };
 }
 
 // ─────────────────────────────────────────────
@@ -475,34 +525,45 @@ export async function addContactsToSequence(
  * Get aggregate metrics for a sequence.
  */
 export async function getSequenceMetrics(sequenceId: string): Promise<SequenceMetrics> {
+  if (!sequenceId) throw new Error('getSequenceMetrics: sequenceId is required');
+
   const client = apolloClient();
-  try {
-    const response = await client.get(`/emailer_campaigns/${sequenceId}`);
-    const c = response.data.emailer_campaign;
-    return {
-      id: c.id,
-      name: c.name,
-      contacts_count: c.num_contacts || 0,
-      emails_sent: c.num_send_email_steps || 0,
-      open_rate: c.open_rate || 0,
-      reply_rate: c.reply_rate || 0,
-      bounce_rate: c.bounce_rate || 0,
-      unsubscribe_rate: c.unsubscribe_rate || 0,
-    };
-  } catch (err: any) {
-    const msg = err.response?.data?.message || err.message;
-    throw new Error(`Apollo get sequence metrics failed: ${msg}`);
+  const response = await withRetry(
+    () => client.get(`/emailer_campaigns/${sequenceId}`),
+    { label: 'apollo_get_sequence_metrics', maxAttempts: 3 }
+  );
+  const c = response.data.emailer_campaign;
+  if (!c) {
+    throw new Error(`Apollo returned no data for sequence "${sequenceId}" — check if the sequence exists`);
   }
+  return {
+    id: c.id,
+    name: c.name,
+    contacts_count: c.num_contacts || 0,
+    emails_sent: c.num_send_email_steps || 0,
+    open_rate: c.open_rate || 0,
+    reply_rate: c.reply_rate || 0,
+    bounce_rate: c.bounce_rate || 0,
+    unsubscribe_rate: c.unsubscribe_rate || 0,
+  };
 }
 
 /**
  * Get reply messages for a sequence.
  */
 export async function getSequenceReplies(sequenceId: string, perPage: number = 50): Promise<ApolloReply[]> {
+  if (!sequenceId) throw new Error('getSequenceReplies: sequenceId is required');
+
   const client = apolloClient();
   try {
-    const response = await client.get(
-      `/emailer_messages?emailer_campaign_id=${sequenceId}&type=reply&per_page=${perPage}`
+    const response = await withRetry(
+      () => client.get(`/emailer_messages?emailer_campaign_id=${sequenceId}&type=reply&per_page=${perPage}`),
+      {
+        label: 'apollo_get_replies',
+        maxAttempts: 3,
+        // 404 is expected when no messages sent yet — don't retry it
+        retryIf: (err) => err?.response?.status !== 404 && isTransientError(err),
+      }
     );
     const data = response.data;
     return (data.emailer_messages || []).map((m: any) => ({
@@ -515,9 +576,11 @@ export async function getSequenceReplies(sequenceId: string, perPage: number = 5
     }));
   } catch (err: any) {
     // 404 is expected when no messages have been sent yet
-    if (err.response?.status === 404) return [];
-    const msg = err.response?.data?.error || err.response?.data?.message || err.message;
-    throw new Error(`Apollo get replies failed: ${msg}`);
+    if (err?.response?.status === 404) {
+      console.warn('  ⚠️ No replies found (sequence may not have sent emails yet)');
+      return [];
+    }
+    throw err;
   }
 }
 
@@ -531,16 +594,18 @@ export async function getSequenceReplies(sequenceId: string, perPage: number = 5
  */
 export async function getEmailAccounts(): Promise<EmailAccount[]> {
   const client = apolloClient();
-  try {
-    const response = await client.get('/email_accounts');
-    const data = response.data;
-    return (data.email_accounts || []).map((a: any) => ({
-      id: a.id,
-      email: a.email,
-      active: a.active !== false,
-    }));
-  } catch (err: any) {
-    const msg = err.response?.data?.message || err.message;
-    throw new Error(`Apollo get email accounts failed: ${msg}`);
+  const response = await withRetry(
+    () => client.get('/email_accounts'),
+    { label: 'apollo_get_email_accounts', maxAttempts: 3 }
+  );
+  const data = response.data;
+  const accounts = (data.email_accounts || []).map((a: any) => ({
+    id: a.id,
+    email: a.email,
+    active: a.active !== false,
+  }));
+  if (accounts.length === 0) {
+    console.warn('  ⚠️ No email accounts connected in Apollo. Go to Apollo Settings → Email Accounts to connect one.');
   }
+  return accounts;
 }

@@ -1,6 +1,7 @@
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import { withRetry } from '../services/retry.ts';
 
 // Dynamic memory context is optional - only imported if available
 let buildDynamicContextFn: ((campaignId?: string) => Promise<string>) | null = null;
@@ -36,8 +37,8 @@ export async function generateDraft(input: DraftGenerationInput): Promise<Genera
 
   const prompt = await buildPrompt(input);
 
-  try {
-    const response = await axios.post(
+  const response = await withRetry(
+    () => axios.post(
       'https://api.openai.com/v1/chat/completions',
       {
         model: 'gpt-4o',
@@ -60,19 +61,39 @@ export async function generateDraft(input: DraftGenerationInput): Promise<Genera
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
+        timeout: 30000,
       }
-    );
+    ),
+    { label: 'openai_generate_draft', maxAttempts: 3 }
+  );
 
-    const content = response.data.choices[0].message.content;
-    const [subjectLine, ...bodyLines] = content.split('\n');
-
-    return {
-      subject: subjectLine.replace('Subject: ', '').trim(),
-      body: bodyLines.join('\n').trim(),
-    };
-  } catch (error: any) {
-    throw new Error(`OpenAI API error: ${error.message}`);
+  // Validate response structure
+  const choices = response.data?.choices;
+  if (!choices || choices.length === 0 || !choices[0]?.message?.content) {
+    throw new Error('OpenAI returned empty response — no choices or content in API response');
   }
+
+  const content = choices[0].message.content;
+  const lines = content.split('\n').filter((l: string) => l.trim() !== '');
+
+  if (lines.length === 0) {
+    throw new Error('OpenAI returned empty content — generated text was blank');
+  }
+
+  const subjectLine = lines[0];
+  const bodyLines = lines.slice(1);
+
+  const subject = subjectLine.replace(/^Subject:\s*/i, '').trim();
+  const body = bodyLines.join('\n').trim();
+
+  if (!subject) {
+    console.warn('  ⚠️ OpenAI generated empty subject line — using fallback');
+  }
+  if (!body || body.length < 20) {
+    console.warn(`  ⚠️ OpenAI generated very short body (${body.length} chars)`);
+  }
+
+  return { subject: subject || 'Follow-up from CirrusLabs', body };
 }
 
 async function buildPrompt(input: DraftGenerationInput): Promise<string> {

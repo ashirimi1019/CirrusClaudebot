@@ -15,6 +15,8 @@ import {
   type SequenceMetrics,
   type ApolloReply,
 } from '../../lib/clients/apollo.ts';
+import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
+import { validateSkillInputs } from '../../lib/services/validation.ts';
 import readline from 'readline';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -44,16 +46,21 @@ export async function runSkill6CampaignReview(
   campaignSlugArg?: string,
   config?: ReviewConfig
 ): Promise<void> {
-  console.log('\n========================================');
-  console.log('SKILL 6: CAMPAIGN REVIEW (Apollo Analytics)');
-  console.log('========================================\n');
+  const tracker = new SkillRunTracker('SKILL 6: CAMPAIGN REVIEW (Apollo Analytics)');
+  tracker.step('Validate inputs');
+  tracker.step('Resolve Apollo sequence');
+  tracker.step('Pull metrics from Apollo');
+  tracker.step('Gather qualitative inputs');
+  tracker.step('Write learnings.md');
+  tracker.step('Update what-works.md');
 
   const cliMode = !!(process.argv[2] && process.argv[3] && !config);
   const autoMode = !!(config?.autoMode || cliMode);
   const rl = autoMode ? null : createReadlineInterface();
 
   try {
-    // ─── Get slugs ───
+    // ─── Step 1: Validate inputs ───
+    tracker.startStep('Validate inputs');
     let offerSlug: string;
     let campaignSlug: string;
 
@@ -69,7 +76,24 @@ export async function runSkill6CampaignReview(
       campaignSlug = await prompt(rl!, 'Enter campaign slug: ');
     }
 
-    // ─── Get Apollo sequence ───
+    const validation = validateSkillInputs({
+      offerSlug,
+      campaignSlug,
+      requirePositioning: true,
+    });
+    if (!validation.valid) {
+      tracker.failStep('Validate inputs', validation.errors.join('; '));
+      tracker.printSummary();
+      if (rl) rl.close();
+      throw new Error(`Skill 6 input validation failed:\n  ${validation.errors.join('\n  ')}`);
+    }
+    if (validation.warnings.length > 0) {
+      validation.warnings.forEach((w) => tracker.warn(w));
+    }
+    tracker.completeStep('Validate inputs', `offer="${offerSlug}", campaign="${campaignSlug}"`);
+
+    // ─── Step 2: Resolve Apollo sequence ───
+    tracker.startStep('Resolve Apollo sequence');
     let sequenceId: string;
     let sequenceName: string;
 
@@ -77,33 +101,41 @@ export async function runSkill6CampaignReview(
       sequenceId = config.apolloSequenceId;
       sequenceName = campaignSlug;
       console.log(`✅ Using configured sequence ID: ${sequenceId}`);
+      tracker.completeStep('Resolve Apollo sequence', `Configured ID: ${sequenceId}`);
     } else {
       console.log('\n🔗 Loading Apollo sequences...');
-      const sequences = await listSequences();
+      let sequences: any[] = [];
+      try {
+        sequences = await listSequences();
+      } catch (seqErr: any) {
+        tracker.warn(`Failed to list sequences: ${seqErr.message}`);
+      }
 
       if (autoMode || sequences.length === 0) {
         // In auto mode without an ID, try to match by campaign name
-        const matched = sequences.find((s) =>
+        const matched = sequences.find((s: any) =>
           s.name.toLowerCase().includes(campaignSlug.toLowerCase())
         );
         if (matched) {
           sequenceId = matched.id;
           sequenceName = matched.name;
           console.log(`✅ Auto-matched sequence: "${sequenceName}"`);
+          tracker.completeStep('Resolve Apollo sequence', `Auto-matched: "${sequenceName}"`);
         } else {
-          console.warn('⚠️  No matching sequence found. Skipping Apollo metrics pull.');
           sequenceId = '';
           sequenceName = campaignSlug;
+          tracker.partialStep('Resolve Apollo sequence', 'No matching sequence found. Metrics pull will be skipped.');
+          tracker.warn('Provide apolloSequenceId in config or ensure sequence name contains the campaign slug.');
         }
       } else {
         // Interactive: show sequence list
         if (process.argv[4]) {
           // Sequence ID passed as 4th arg
           sequenceId = process.argv[4];
-          sequenceName = sequences.find((s) => s.id === sequenceId)?.name || campaignSlug;
+          sequenceName = sequences.find((s: any) => s.id === sequenceId)?.name || campaignSlug;
         } else {
           console.log('\nSequences found:');
-          sequences.forEach((s, i) => {
+          sequences.forEach((s: any, i: number) => {
             console.log(`  [${i + 1}] ${s.name} (ID: ${s.id}, ${s.num_contacts} contacts)`);
           });
 
@@ -118,16 +150,21 @@ export async function runSkill6CampaignReview(
             sequenceName = campaignSlug;
           }
         }
+        tracker.completeStep('Resolve Apollo sequence', `"${sequenceName}" (ID: ${sequenceId})`);
       }
     }
 
-    // ─── Pull metrics from Apollo ───
+    // ─── Step 3: Pull metrics from Apollo ───
+    tracker.startStep('Pull metrics from Apollo');
     let metrics: SequenceMetrics | null = null;
     let replies: ApolloReply[] = [];
+    let metricsPulled = false;
+    let repliesPulled = false;
 
     if (sequenceId) {
       try {
         metrics = await getSequenceMetrics(sequenceId);
+        metricsPulled = true;
         console.log('\n📊 Apollo Sequence Metrics:');
         console.log(`  Contacts:     ${metrics.contacts_count}`);
         console.log(`  Emails sent:  ${metrics.emails_sent}`);
@@ -135,22 +172,38 @@ export async function runSkill6CampaignReview(
         console.log(`  Reply rate:   ${(metrics.reply_rate * 100).toFixed(1)}%`);
         console.log(`  Bounce rate:  ${(metrics.bounce_rate * 100).toFixed(1)}%`);
       } catch (err: any) {
-        console.warn(`⚠️  Could not fetch metrics: ${err.message}`);
+        tracker.warn(`Could not fetch sequence metrics: ${err.message}`);
       }
 
       try {
         replies = await getSequenceReplies(sequenceId);
+        repliesPulled = true;
         console.log(`💬 Replies pulled: ${replies.length}`);
       } catch (err: any) {
-        console.warn(`⚠️  Could not fetch replies: ${err.message}`);
+        tracker.warn(`Could not fetch sequence replies: ${err.message}`);
       }
+
+      if (metricsPulled && repliesPulled) {
+        tracker.completeStep('Pull metrics from Apollo', `${metrics?.emails_sent ?? 0} emails, ${replies.length} replies`);
+      } else if (metricsPulled || repliesPulled) {
+        tracker.partialStep('Pull metrics from Apollo', `metrics=${metricsPulled ? 'yes' : 'failed'}, replies=${repliesPulled ? 'yes' : 'failed'}`);
+      } else {
+        tracker.partialStep('Pull metrics from Apollo', 'Both metrics and replies pulls failed. Check Apollo API key and sequence ID.');
+      }
+    } else {
+      tracker.skipStep('Pull metrics from Apollo', 'No sequence ID resolved — using manual/default values');
     }
 
     const emailsSent = metrics?.emails_sent ?? 0;
     const totalReplies = replies.length;
     const openRate = metrics ? (metrics.open_rate * 100).toFixed(1) : '0';
 
-    // ─── Manual inputs (or defaults in auto-mode) ───
+    if (emailsSent === 0 && totalReplies === 0) {
+      tracker.warn('Both emailsSent and totalReplies are 0. Campaign may not have been launched or metrics are not yet available.');
+    }
+
+    // ─── Step 4: Gather qualitative inputs ───
+    tracker.startStep('Gather qualitative inputs');
     let meetings: number;
     let closed: number;
     let bestVariant: string;
@@ -170,7 +223,7 @@ export async function runSkill6CampaignReview(
       objections = 'none recorded';
       wins = `Open rate: ${openRate}%, Reply rate: ${totalReplies > 0 ? ((totalReplies / Math.max(emailsSent, 1)) * 100).toFixed(1) : 0}%`;
       mistakes = 'none recorded - review Apollo dashboard for details';
-      console.log('\n📋 Auto-mode: using defaults for qualitative inputs');
+      tracker.completeStep('Gather qualitative inputs', 'Auto-mode defaults applied');
     } else {
       // Interactive
       console.log('\n📝 Enter additional metrics (cannot be auto-pulled from Apollo):\n');
@@ -193,6 +246,7 @@ export async function runSkill6CampaignReview(
       mistakes = await prompt(rl!, "Mistakes you'd avoid next time?: ");
 
       if (rl) rl.close();
+      tracker.completeStep('Gather qualitative inputs', `${meetings} meetings, ${closed} deals closed`);
     }
 
     // ─── Calculate metrics ───
@@ -205,7 +259,8 @@ export async function runSkill6CampaignReview(
       .map((r) => `- ${r.contact_name} (${r.contact_email}): "${r.body_text.substring(0, 100)}..."`)
       .join('\n');
 
-    // ─── Write learnings file ───
+    // ─── Step 5: Write learnings file ───
+    tracker.startStep('Write learnings.md');
     const learningsContent = `# Campaign Review: ${campaignSlug}
 
 **Offer:** ${offerSlug}
@@ -280,29 +335,34 @@ Generated: ${new Date().toISOString()}
     const learningsPath = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlugArg || campaignSlug, 'results', 'learnings.md');
     fs.mkdirSync(path.dirname(learningsPath), { recursive: true });
     fs.writeFileSync(learningsPath, learningsContent);
-    console.log(`\n✅ Learnings saved: ${learningsPath}`);
+    tracker.completeStep('Write learnings.md', learningsPath);
 
-    // ─── Update what-works.md ───
+    // ─── Step 6: Update what-works.md ───
+    tracker.startStep('Update what-works.md');
     const whatWorksPath = path.join(process.cwd(), 'context', 'learnings', 'what-works.md');
-    const existing = fs.existsSync(whatWorksPath) ? fs.readFileSync(whatWorksPath, 'utf-8') : '';
 
-    const update =
-      `\n\n---\n\n## Campaign: ${campaignSlug} (${new Date().toLocaleDateString()})\n\n` +
-      `- **Sequence:** ${sequenceName}\n` +
-      `- **Emails sent:** ${emailsSent}\n` +
-      `- **Open rate:** ${openRate}%\n` +
-      `- **Reply rate:** ${replyRate}%\n` +
-      `- **Meetings booked:** ${meetings}\n` +
-      `- **Best variant:** ${bestVariant}\n` +
-      `- **Best buyer title:** ${bestTitle}\n` +
-      `- **Key learning:** ${wins}\n`;
+    try {
+      const existing = fs.existsSync(whatWorksPath) ? fs.readFileSync(whatWorksPath, 'utf-8') : '';
 
-    fs.writeFileSync(whatWorksPath, existing + update);
-    console.log(`✅ Updated: ${whatWorksPath}`);
+      const update =
+        `\n\n---\n\n## Campaign: ${campaignSlug} (${new Date().toLocaleDateString()})\n\n` +
+        `- **Sequence:** ${sequenceName}\n` +
+        `- **Emails sent:** ${emailsSent}\n` +
+        `- **Open rate:** ${openRate}%\n` +
+        `- **Reply rate:** ${replyRate}%\n` +
+        `- **Meetings booked:** ${meetings}\n` +
+        `- **Best variant:** ${bestVariant}\n` +
+        `- **Best buyer title:** ${bestTitle}\n` +
+        `- **Key learning:** ${wins}\n`;
 
-    console.log('\n========================================');
-    console.log('✅ SKILL 6 COMPLETE');
-    console.log('========================================');
+      fs.writeFileSync(whatWorksPath, existing + update);
+      tracker.completeStep('Update what-works.md', whatWorksPath);
+    } catch (wwErr: any) {
+      tracker.partialStep('Update what-works.md', `Failed to update: ${wwErr.message}. Learnings.md was saved.`);
+      tracker.warn(`what-works.md update failed: ${wwErr.message}. Ensure context/learnings/ directory exists.`);
+    }
+
+    tracker.printSummary();
     console.log(`\n  Open rate:    ${openRate}%`);
     console.log(`  Reply rate:   ${replyRate}% (${totalReplies} replies)`);
     console.log(`  Meetings:     ${meetings}`);
@@ -310,9 +370,9 @@ Generated: ${new Date().toISOString()}
     console.log('\n💡 Learnings added to context/learnings/what-works.md');
     console.log('🔄 Flywheel complete! Next campaign will be smarter.');
   } catch (err: any) {
-    console.error('❌ Error:', err.message || err);
     if (rl) rl.close();
-    process.exit(1);
+    // Re-throw — don't process.exit so callers can handle
+    throw err;
   }
 }
 

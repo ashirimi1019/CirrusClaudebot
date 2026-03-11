@@ -17,6 +17,8 @@ import {
   getEmailAccounts,
   type ApolloSequence,
 } from '../../lib/clients/apollo.ts';
+import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
+import { validateSkillInputs } from '../../lib/services/validation.ts';
 import { createReadStream } from 'fs';
 import { createInterface } from 'readline';
 import readline from 'readline';
@@ -134,9 +136,13 @@ export async function runSkill5LaunchOutreach(
   campaignSlugArg?: string,
   config?: OutreachConfig
 ): Promise<string | void> {
-  console.log('\n========================================');
-  console.log('SKILL 5: LAUNCH OUTREACH (Apollo Sequences)');
-  console.log('========================================\n');
+  const tracker = new SkillRunTracker('SKILL 5: LAUNCH OUTREACH (Apollo Sequences)');
+  tracker.step('Validate inputs');
+  tracker.step('Load contacts & copy');
+  tracker.step('Select/create sequence');
+  tracker.step('Add email steps');
+  tracker.step('Create contacts in Apollo');
+  tracker.step('Enroll in sequence');
 
   let offerSlug: string;
   let campaignSlug: string;
@@ -160,34 +166,59 @@ export async function runSkill5LaunchOutreach(
     campaignSlug = await prompt(rl!, 'Enter campaign slug: ');
   }
 
+  // ─── Step 1: Validate inputs ───
+  tracker.startStep('Validate inputs');
+  const validation = validateSkillInputs({
+    offerSlug,
+    campaignSlug,
+    requireCopy: true,
+    requireLeads: true,
+  });
+  if (!validation.valid) {
+    tracker.failStep('Validate inputs', validation.errors.join('; '));
+    tracker.printSummary();
+    if (rl) rl.close();
+    throw new Error(`Skill 5 input validation failed:\n  ${validation.errors.join('\n  ')}`);
+  }
+  if (validation.warnings.length > 0) {
+    validation.warnings.forEach((w) => tracker.warn(w));
+  }
+  tracker.completeStep('Validate inputs', `offer="${offerSlug}", campaign="${campaignSlug}"`);
+
   try {
     // Paths
     const copyDir = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlug, 'copy');
     const leadsPath = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlug, 'leads', 'all_leads.csv');
 
-    if (!fs.existsSync(leadsPath)) {
-      throw new Error(`all_leads.csv not found. Run Skill 4 first.\nExpected: ${leadsPath}`);
-    }
-
-    // ─── Step 1: Load contacts ───
-    console.log('📖 Loading leads and copy...');
+    // ─── Step 2: Load contacts & copy ───
+    tracker.startStep('Load contacts & copy');
     const allLeads = await readCSV(leadsPath);
     // Only rows with an email (skip company-only rows)
     const contacts = allLeads.filter((row) => row.email && row.email.trim());
-    console.log(`✅ ${contacts.length} contacts with emails loaded`);
 
-    // ─── Step 2: Load email variants ───
+    if (contacts.length === 0) {
+      tracker.failStep('Load contacts & copy', `all_leads.csv has ${allLeads.length} rows but 0 contacts with emails. Run Skill 4 again or check CSV.`);
+      tracker.printSummary();
+      if (rl) rl.close();
+      throw new Error('Skill 5: No contacts with emails found in all_leads.csv');
+    }
+
     const variantFiles = fs.readdirSync(copyDir).filter((f) => f.startsWith('email-') && f.endsWith('.txt'));
-    if (variantFiles.length === 0) throw new Error(`No email variants found in ${copyDir}. Run Skill 3 first.`);
+    if (variantFiles.length === 0) {
+      tracker.failStep('Load contacts & copy', `No email-*.txt files found in ${copyDir}. Run Skill 3 first.`);
+      tracker.printSummary();
+      if (rl) rl.close();
+      throw new Error(`Skill 5: No email variants found in ${copyDir}`);
+    }
 
     const variants = variantFiles.map((file) => {
       const content = fs.readFileSync(path.join(copyDir, file), 'utf-8');
       return { name: file.replace('.txt', ''), ...parseEmailVariant(content, file) };
     });
-    console.log(`✅ ${variants.length} email variants loaded\n`);
+    tracker.completeStep('Load contacts & copy', `${contacts.length} contacts, ${variants.length} email variants`);
 
     // ─── Step 3: Choose or create Apollo sequence ───
-    console.log('🔗 Loading Apollo sequences...');
+    tracker.startStep('Select/create sequence');
     const existingSequences = await listSequences();
 
     let sequence: ApolloSequence;
@@ -200,6 +231,9 @@ export async function runSkill5LaunchOutreach(
         sequence = found;
         console.log(`✅ Using configured sequence: "${sequence.name}"`);
       } else {
+        tracker.failStep('Select/create sequence', `Sequence ID "${config.apolloSequenceId}" not found in Apollo`);
+        tracker.printSummary();
+        if (rl) rl.close();
         throw new Error(`Sequence ID "${config.apolloSequenceId}" not found in Apollo`);
       }
     } else if (autoMode || config?.autoCreateSequence) {
@@ -230,7 +264,12 @@ export async function runSkill5LaunchOutreach(
         console.log(`✅ Created sequence: "${sequence.name}" (ID: ${sequence.id})`);
       } else {
         const idx = parseInt(choice) - 1;
-        if (idx < 0 || idx >= existingSequences.length) throw new Error('Invalid selection');
+        if (idx < 0 || idx >= existingSequences.length) {
+          tracker.failStep('Select/create sequence', `Invalid selection: "${choice}"`);
+          tracker.printSummary();
+          if (rl) rl.close();
+          throw new Error('Invalid sequence selection');
+        }
         sequence = existingSequences[idx];
         console.log(`✅ Using existing sequence: "${sequence.name}"`);
       }
@@ -239,35 +278,49 @@ export async function runSkill5LaunchOutreach(
       sequence = await createSequence(defaultSequenceName);
       console.log(`✅ Created sequence: "${sequence.name}" (ID: ${sequence.id})`);
     }
+    tracker.completeStep('Select/create sequence', `"${sequence.name}" (ID: ${sequence.id})`);
 
     // ─── Step 4: Add email steps to sequence (if new sequence) ───
+    tracker.startStep('Add email steps');
     if (sequence.num_steps === 0) {
-      console.log(`\n📧 Adding ${variants.length} email steps to sequence...`);
       // Day offsets: first email day 0, follow-ups day 3 and day 7
       const dayOffsets = [0, 3, 7];
+      let stepFailures = 0;
 
       for (let i = 0; i < variants.length; i++) {
         const variant = variants[i];
-        const signal = contacts[0]?.hiring_signal || 'engineering talent';
-        // Use a generic version of the first contact for step templates
         const templateSubject = variant.subject;
         const templateBody = variant.body;
 
-        await addEmailStepToSequence(
-          sequence.id,
-          templateSubject,
-          templateBody,
-          dayOffsets[i] ?? (i * 3),
-          i + 1
-        );
-        console.log(`  ✅ Step ${i + 1}: "${templateSubject.substring(0, 50)}..." (day ${dayOffsets[i] ?? i * 3})`);
+        try {
+          await addEmailStepToSequence(
+            sequence.id,
+            templateSubject,
+            templateBody,
+            dayOffsets[i] ?? (i * 3),
+            i + 1
+          );
+          console.log(`  ✅ Step ${i + 1}: "${templateSubject.substring(0, 50)}..." (day ${dayOffsets[i] ?? i * 3})`);
+        } catch (stepErr: any) {
+          stepFailures++;
+          tracker.warn(`Failed to add email step ${i + 1}: ${stepErr.message}`);
+        }
+      }
+
+      const stepsAdded = variants.length - stepFailures;
+      if (stepsAdded === 0) {
+        tracker.failStep('Add email steps', `All ${variants.length} step additions failed. Check Apollo API permissions.`);
+      } else if (stepFailures > 0) {
+        tracker.partialStep('Add email steps', `${stepsAdded}/${variants.length} steps added, ${stepFailures} failed`, stepsAdded);
+      } else {
+        tracker.completeStep('Add email steps', `${stepsAdded} steps added`, stepsAdded);
       }
     } else {
-      console.log(`\nℹ️  Sequence already has ${sequence.num_steps} steps — skipping step creation`);
+      tracker.completeStep('Add email steps', `Sequence already has ${sequence.num_steps} steps — skipped`);
     }
 
-    // ─── Step 5: Personalize + create contacts in Apollo ───
-    console.log(`\n👥 Creating ${contacts.length} contacts in Apollo CRM...`);
+    // ─── Step 5: Create contacts in Apollo ───
+    tracker.startStep('Create contacts in Apollo');
 
     const contactInputs = contacts.map((contact) => ({
       first_name: contact.first_name || '',
@@ -278,49 +331,63 @@ export async function runSkill5LaunchOutreach(
       website_url: contact.company_domain ? `https://${contact.company_domain}` : undefined,
     }));
 
-    const createdContacts = await bulkCreateContacts(contactInputs);
-    const contactIds = createdContacts.map((c) => c.id);
+    let contactIds: string[] = [];
+    try {
+      const createdContacts = await bulkCreateContacts(contactInputs);
+      contactIds = createdContacts.map((c) => c.id);
 
-    console.log(`✅ ${createdContacts.length} contacts created in Apollo`);
+      if (contactIds.length === 0) {
+        tracker.failStep('Create contacts in Apollo', `bulkCreateContacts returned 0 contacts. Check Apollo API response.`);
+      } else if (contactIds.length < contacts.length) {
+        tracker.partialStep('Create contacts in Apollo', `${contactIds.length}/${contacts.length} contacts created`, contactIds.length);
+      } else {
+        tracker.completeStep('Create contacts in Apollo', `${contactIds.length} contacts created`, contactIds.length);
+      }
+    } catch (createErr: any) {
+      tracker.failStep('Create contacts in Apollo', `bulkCreateContacts failed: ${createErr.message}`);
+      tracker.printSummary();
+      if (rl) rl.close();
+      throw new Error(`Skill 5: Failed to create contacts in Apollo: ${createErr.message}`);
+    }
 
     // ─── Step 6: Enroll contacts in sequence ───
-    console.log(`\n🚀 Enrolling contacts in sequence "${sequence.name}"...`);
+    tracker.startStep('Enroll in sequence');
 
-    // Check email accounts
     let enrollmentSuccess = false;
     let sendingEmail = 'N/A';
-    try {
-      const emailAccounts = await getEmailAccounts();
-      if (emailAccounts.length === 0) {
-        console.warn('⚠️  No email accounts connected in Apollo.');
-        console.warn('   → Contacts created and sequence ready, but enrollment skipped.');
-        console.warn('   → Go to Apollo Settings → Email Accounts → Connect a mailbox');
-        console.warn('   → Then manually add contacts to the sequence in Apollo UI');
-      } else {
-        const activeAccount = emailAccounts.find((a) => a.active);
-        sendingEmail = activeAccount?.email || emailAccounts[0].email;
-        console.log(`  → Sending from: ${sendingEmail}`);
 
-        await addContactsToSequence(contactIds, sequence.id, activeAccount?.id || emailAccounts[0].id);
-        enrollmentSuccess = true;
+    if (contactIds.length === 0) {
+      tracker.skipStep('Enroll in sequence', 'No contacts to enroll (0 created in previous step)');
+    } else {
+      try {
+        const emailAccounts = await getEmailAccounts();
+        if (emailAccounts.length === 0) {
+          tracker.partialStep('Enroll in sequence', 'No email accounts connected in Apollo. Contacts created but enrollment skipped.');
+          tracker.warn('Go to Apollo Settings → Email Accounts → Connect a mailbox, then manually enroll contacts.');
+        } else {
+          const activeAccount = emailAccounts.find((a) => a.active);
+          sendingEmail = activeAccount?.email || emailAccounts[0].email;
+          console.log(`  → Sending from: ${sendingEmail}`);
+
+          await addContactsToSequence(contactIds, sequence.id, activeAccount?.id || emailAccounts[0].id);
+          enrollmentSuccess = true;
+          tracker.completeStep('Enroll in sequence', `${contactIds.length} contacts enrolled, sending from ${sendingEmail}`, contactIds.length);
+        }
+      } catch (enrollErr: any) {
+        tracker.partialStep('Enroll in sequence', `Enrollment failed: ${enrollErr.message}. Contacts created but not enrolled.`);
+        tracker.warn('You can manually enroll contacts in Apollo UI.');
       }
-    } catch (enrollErr: any) {
-      console.warn(`⚠️  Enrollment failed: ${enrollErr.message}`);
-      console.warn('   → Contacts created and sequence ready, but enrollment skipped.');
-      console.warn('   → You can manually enroll contacts in Apollo UI.');
     }
 
     if (rl) rl.close();
 
-    console.log('\n========================================');
-    console.log(enrollmentSuccess ? '✅ SKILL 5 COMPLETE' : '⚠️  SKILL 5 PARTIALLY COMPLETE');
-    console.log('========================================');
+    tracker.printSummary();
     console.log(`\nResults:`);
     console.log(`  Contacts created:   ${contactIds.length}`);
     console.log(`  Sequence:           "${sequence.name}"`);
     console.log(`  Sequence ID:        ${sequence.id}`);
     console.log(`  Email steps:        ${sequence.num_steps > 0 ? sequence.num_steps : variants.length}`);
-    console.log(`  Enrolled:           ${enrollmentSuccess ? contactIds.length : '0 (no email account)'}`);
+    console.log(`  Enrolled:           ${enrollmentSuccess ? contactIds.length : '0 (see warnings above)'}`);
     console.log(`  Sending from:       ${sendingEmail}`);
     if (enrollmentSuccess) {
       console.log(`\nApollo will send the sequence automatically based on your settings.`);
@@ -333,9 +400,9 @@ export async function runSkill5LaunchOutreach(
 
     return sequence.id;
   } catch (err: any) {
-    console.error('❌ Error:', err.message || err);
     if (rl) rl.close();
-    process.exit(1);
+    // Re-throw — don't process.exit so callers can handle
+    throw err;
   }
 }
 

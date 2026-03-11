@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getSupabaseClient } from '../../lib/supabase.ts';
+import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
 import readline from 'readline';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -54,22 +55,38 @@ function generateSlug(text: string): string {
  * Returns the offer slug.
  */
 export async function runSkill1NewOffer(config?: OfferConfig): Promise<string> {
-  console.log('\n========================================');
-  console.log('SKILL 1: NEW OFFER - POSITIONING CANVAS');
-  console.log('========================================\n');
+  const tracker = new SkillRunTracker('SKILL 1: NEW OFFER — POSITIONING CANVAS');
+  tracker.step('Gather positioning input');
+  tracker.step('Write positioning.md');
+  tracker.step('Save to database');
 
   let input: PositioningInput;
 
+  // ─── Step 1: Gather input ───
+  tracker.startStep('Gather positioning input');
+
   if (config) {
     // ── AUTOMATED MODE ──
+    if (!config.name || config.name.trim() === '') {
+      tracker.failStep('Gather positioning input', 'config.name is required but was empty');
+      tracker.printSummary();
+      throw new Error('Skill 1: config.name is required. Provide a non-empty offer name.');
+    }
     console.log(`📋 Config mode: using "${config.name}"`);
     const offerSlug = generateSlug(config.name);
     input = { ...config, offerName: config.name, offerSlug };
+    tracker.completeStep('Gather positioning input', `offer="${config.name}", slug="${offerSlug}"`);
   } else {
     // ── INTERACTIVE MODE ──
     const rl = createReadlineInterface();
     try {
       const offerName = await prompt(rl, 'Enter offer name (e.g., "Talent As A Service - US"): ');
+      if (!offerName) {
+        rl.close();
+        tracker.failStep('Gather positioning input', 'Offer name cannot be empty');
+        tracker.printSummary();
+        throw new Error('Skill 1: Offer name is required.');
+      }
       const offerSlug = generateSlug(offerName);
       console.log(`\n✅ Offer slug: ${offerSlug}`);
       console.log('\nWalk through the 13 sections of the positioning canvas.\n');
@@ -93,24 +110,26 @@ export async function runSkill1NewOffer(config?: OfferConfig): Promise<string> {
         successStories: await prompt(rl, '13. SUCCESS STORIES / PROOF POINTS - Real examples?: '),
       };
       rl.close();
+      tracker.completeStep('Gather positioning input', `offer="${offerName}"`);
     } catch (err) {
       rl.close();
       throw err;
     }
   }
 
-  // Create directory structure
+  // ─── Step 2: Write positioning file ───
+  tracker.startStep('Write positioning.md');
   const offersDir = path.join(process.cwd(), 'offers', input.offerSlug);
   fs.mkdirSync(path.join(offersDir, 'campaigns'), { recursive: true });
   fs.mkdirSync(path.join(offersDir, 'leads'), { recursive: true });
   fs.mkdirSync(path.join(offersDir, 'results'), { recursive: true });
 
-  // Write positioning.md
   const positioningPath = path.join(offersDir, 'positioning.md');
   fs.writeFileSync(positioningPath, generatePositioningMarkdown(input));
-  console.log(`✅ Positioning saved: ${positioningPath}`);
+  tracker.completeStep('Write positioning.md', positioningPath);
 
-  // Save to database
+  // ─── Step 3: Save to database ───
+  tracker.startStep('Save to database');
   const sb = getSupabaseClient();
   const { error } = await sb.from('offers').upsert(
     {
@@ -136,15 +155,14 @@ export async function runSkill1NewOffer(config?: OfferConfig): Promise<string> {
   );
 
   if (error) {
-    console.warn(`⚠️ Database warning: ${error.message}`);
+    tracker.partialStep('Save to database', `DB upsert warning: ${error.message}`);
+    tracker.warn('Positioning file was saved, but database record may be stale.');
   } else {
-    console.log('✅ Saved to database');
+    tracker.completeStep('Save to database', 'Upserted offer record');
   }
 
-  console.log('\n========================================');
-  console.log('✅ SKILL 1 COMPLETE');
-  console.log('========================================');
-  console.log(`\nNext: npm run skill:2`);
+  tracker.printSummary();
+  console.log(`Next: npm run skill:2`);
 
   return input.offerSlug;
 }
