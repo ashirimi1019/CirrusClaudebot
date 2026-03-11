@@ -244,9 +244,24 @@ export async function runSkill3CampaignCopy(): Promise<void> {
 
     // Save to database
     const sb = getSupabaseClient();
+
+    // First get the offer_id
+    const { data: offerData, error: offerError } = await sb
+      .from('offers')
+      .select('id')
+      .eq('slug', offerSlug)
+      .single();
+
+    if (offerError || !offerData) {
+      console.error('❌ Failed to find offer:', offerError?.message);
+      process.exit(1);
+    }
+
+    // Then get campaign scoped to this offer
     const { data: campaign, error: campaignError } = await sb
       .from('campaigns')
       .select('id')
+      .eq('offer_id', offerData.id)
       .eq('slug', campaignSlug)
       .single();
 
