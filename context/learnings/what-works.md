@@ -319,3 +319,17 @@ After 5-10 campaigns, this file will show:
 This becomes your playbook. The system learns from itself.
 
 That's the agent flywheel.
+
+
+---
+
+## Campaign: test-campaign (3/11/2026)
+
+- **Sequence:** test-campaign
+- **Emails sent:** 0
+- **Open rate:** 0%
+- **Reply rate:** 0%
+- **Meetings booked:** 5
+- **Best variant:** email-variant-1
+- **Best buyer title:** CTO
+- **Key learning:** Open rate: 0%, Reply rate: 0%
