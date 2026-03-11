@@ -24,14 +24,16 @@ export async function GET(request: NextRequest) {
     .eq('slug', offer)
     .limit(1);
   const skill1 = (offerRows?.length ?? 0) > 0;
+  const offerId: string | null = offerRows?.[0]?.id ?? null;
 
-  // Skill 2: campaign row exists in DB
+  // Skill 2: campaign row exists in DB (scoped to this offer)
   let skill2 = false;
   let campaignId: string | null = null;
-  if (campaign) {
+  if (campaign && offerId) {
     const { data: campaignRows } = await sb
       .from('campaigns')
       .select('id')
+      .eq('offer_id', offerId)
       .eq('slug', campaign)
       .limit(1);
     skill2 = (campaignRows?.length ?? 0) > 0;

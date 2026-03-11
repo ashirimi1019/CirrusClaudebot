@@ -136,7 +136,7 @@ export async function runSkill2CampaignStrategy(offerSlug?: string, config?: Cam
           messaging_framework: input.messagingFramework,
         },
       },
-      { onConflict: 'slug' }
+      { onConflict: 'offer_id,slug' }
     );
     if (error) {
       console.warn(`⚠️ Database warning: ${error.message}`);

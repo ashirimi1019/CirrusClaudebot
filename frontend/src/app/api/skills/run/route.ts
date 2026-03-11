@@ -100,9 +100,13 @@ export async function GET(request: NextRequest) {
                   /* webpackChunkName: "skill-2" */
                   '@cirrus/skills/skill-2-campaign-strategy'
                 );
+                // If formData is empty (pipeline re-run), fall back to campaign slug as name.
+                const skill2Config = Object.keys(formData).length > 0
+                  ? formData
+                  : { name: campaign };
                 await runSkill2CampaignStrategy(
                   offer,
-                  formData as unknown as Parameters<typeof runSkill2CampaignStrategy>[1],
+                  skill2Config as unknown as Parameters<typeof runSkill2CampaignStrategy>[1],
                 );
                 break;
               }
