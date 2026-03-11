@@ -51,8 +51,9 @@ export async function GET(request: NextRequest) {
     skill3 = (variantRows?.length ?? 0) > 0;
   }
 
-  // Skills 4-6: check /tmp file system (Vercel ephemeral, best effort)
-  const workDir = process.env.CIRRUS_WORK_DIR ?? path.join('/tmp', 'cirrus-work');
+  // Skills 4-6: check file system for outputs
+  // Local dev: check project root offers/; Vercel: check /tmp/cirrus-work
+  const workDir = process.env.CIRRUS_WORK_DIR ?? path.join(process.cwd(), '..');
   const offersBase = path.join(workDir, 'offers');
 
   const exists = (...parts: string[]) => {
