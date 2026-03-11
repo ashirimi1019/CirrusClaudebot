@@ -1,48 +1,43 @@
 "use client";
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import Image from "next/image";
 import {
-  Settings, Key, Database, Globe, Check, X, Eye, EyeOff,
-  Zap, Mail, BarChart3, FileSpreadsheet, Shield,
+  Settings, Database, Globe, Check, X,
+  Zap, BarChart3, FileSpreadsheet, Shield, Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getUser } from "@/lib/auth";
+import type { User } from "@supabase/supabase-js";
 
 type Integration = {
   name: string;
   description: string;
-  envKey: string;
   icon: React.ElementType;
   color: string;
   docs: string;
   status: "connected" | "missing";
 };
 
-// Check which env vars are available (only NEXT_PUBLIC_ ones are accessible client-side)
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
 const integrations: Integration[] = [
   {
     name: "Supabase",
     description: "Database for companies, contacts, campaigns and metrics",
-    envKey: "NEXT_PUBLIC_SUPABASE_URL",
     icon: Database,
     color: "bg-emerald-500/20 text-emerald-400",
     docs: "https://supabase.com/docs",
-    status: supabaseUrl ? "connected" : "missing",
+    status: process.env.NEXT_PUBLIC_SUPABASE_URL ? "connected" : "missing",
   },
   {
     name: "Apollo.io",
     description: "Signal detection, contact enrichment, email sequences",
-    envKey: "APOLLO_API_KEY",
     icon: Zap,
     color: "bg-indigo-500/20 text-indigo-400",
     docs: "https://apolloio.github.io/apollo-api-docs/",
-    status: "connected", // Set in backend .env, assumed present
+    status: "connected",
   },
   {
     name: "OpenAI",
     description: "AI copy generation and reply classification",
-    envKey: "OPENAI_API_KEY",
     icon: BarChart3,
     color: "bg-violet-500/20 text-violet-400",
     docs: "https://platform.openai.com/docs",
@@ -51,7 +46,6 @@ const integrations: Integration[] = [
   {
     name: "Google Sheets",
     description: "Stakeholder visibility and campaign export",
-    envKey: "GOOGLE_SERVICE_ACCOUNT_EMAIL",
     icon: FileSpreadsheet,
     color: "bg-amber-500/20 text-amber-400",
     docs: "https://developers.google.com/sheets/api",
@@ -59,46 +53,51 @@ const integrations: Integration[] = [
   },
 ];
 
-type EnvVar = { key: string; label: string; value: string; secret: boolean };
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const envVars: EnvVar[] = [
-  { key: "SUPABASE_URL", label: "Supabase URL", value: supabaseUrl ?? "Not set", secret: false },
-  { key: "SUPABASE_ANON_KEY", label: "Supabase Anon Key", value: supabaseKey ?? "Not set", secret: true },
-  { key: "APOLLO_API_KEY", label: "Apollo API Key", value: "••••••••••••••••••••", secret: true },
-  { key: "OPENAI_API_KEY", label: "OpenAI API Key", value: "sk-••••••••••••••••••••••", secret: true },
-  { key: "GOOGLE_SERVICE_ACCOUNT_EMAIL", label: "Google Service Account", value: "cirruslabs@*.iam.gserviceaccount.com", secret: false },
-];
-
-function EnvRow({ ev }: { ev: EnvVar }) {
-  const [show, setShow] = useState(false);
-  const isSet = ev.value !== "Not set";
-  return (
-    <div className="flex items-center justify-between px-5 py-3.5 border-b border-neutral-800/60 last:border-0">
-      <div>
-        <div className="text-xs font-mono text-neutral-300">{ev.key}</div>
-        <div className="text-xs text-neutral-600 mt-0.5">{ev.label}</div>
-      </div>
-      <div className="flex items-center gap-2">
-        <span className={cn("text-xs font-mono", isSet ? "text-neutral-400" : "text-rose-400")}>
-          {ev.secret && !show ? "••••••••••••" : ev.value}
-        </span>
-        {ev.secret && isSet && (
-          <button onClick={() => setShow(!show)} className="text-neutral-600 hover:text-neutral-400">
-            {show ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-          </button>
-        )}
-        <span className={cn("h-2 w-2 rounded-full", isSet ? "bg-emerald-400" : "bg-rose-400")} />
-      </div>
-    </div>
-  );
+function getInitials(name: string): string {
+  return name
+    .split(" ")
+    .map((n) => n[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
 }
 
+function deriveDisplayName(user: User | null): string {
+  if (!user) return "Account";
+  if (user.user_metadata?.full_name) return user.user_metadata.full_name;
+  if (user.email) {
+    const local = user.email.split("@")[0];
+    return local
+      .split(/[._-]/)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+  }
+  return "Account";
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
 export default function SettingsPage() {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    getUser()
+      .then(setUser)
+      .finally(() => setLoading(false));
+  }, []);
+
+  const displayName = deriveDisplayName(user);
+  const avatarUrl = user?.user_metadata?.avatar_url;
+  const email = user?.email ?? "";
+
   return (
     <div className="p-6 md:p-8 max-w-4xl">
       <div className="mb-8">
         <h1 className="text-xl font-bold text-white">Settings</h1>
-        <p className="text-sm text-neutral-500 mt-0.5">API integrations and system configuration</p>
+        <p className="text-sm text-neutral-500 mt-0.5">Account, integrations, and system info</p>
       </div>
 
       {/* Account */}
@@ -107,21 +106,40 @@ export default function SettingsPage() {
           <Shield className="h-4 w-4 text-neutral-400" />
           <h2 className="text-sm font-semibold text-white">Account</h2>
         </div>
-        <div className="p-5 flex items-center gap-4">
-          <div className="h-12 w-12 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold text-lg">
-            A
+        {loading ? (
+          <div className="flex items-center justify-center py-10 gap-2 text-neutral-600">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            <span className="text-xs">Loading account…</span>
           </div>
-          <div>
-            <div className="text-white font-medium">Ashir Ahmed</div>
-            <div className="text-neutral-500 text-sm">CirrusLabs GTM Engine</div>
+        ) : (
+          <div className="p-5 flex items-center gap-4">
+            {avatarUrl ? (
+              <Image
+                src={avatarUrl}
+                className="h-12 w-12 rounded-full flex-shrink-0 object-cover border border-neutral-700"
+                width={48}
+                height={48}
+                alt="User avatar"
+              />
+            ) : (
+              <div className="h-12 w-12 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold text-lg flex-shrink-0">
+                {getInitials(displayName)}
+              </div>
+            )}
+            <div className="min-w-0">
+              <div className="text-white font-medium truncate">{displayName}</div>
+              {email && (
+                <div className="text-neutral-500 text-sm truncate">{email}</div>
+              )}
+            </div>
+            <div className="ml-auto flex-shrink-0">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                Active
+              </span>
+            </div>
           </div>
-          <div className="ml-auto">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-              Active
-            </span>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Integrations */}
@@ -164,22 +182,6 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Environment Variables */}
-      <div className="rounded-xl bg-neutral-900 border border-neutral-800 overflow-hidden mb-6">
-        <div className="px-5 py-4 border-b border-neutral-800 flex items-center gap-2">
-          <Key className="h-4 w-4 text-neutral-400" />
-          <h2 className="text-sm font-semibold text-white">Environment Variables</h2>
-        </div>
-        <div>
-          {envVars.map((ev) => <EnvRow key={ev.key} ev={ev} />)}
-        </div>
-        <div className="px-5 py-3 bg-neutral-800/30 border-t border-neutral-800">
-          <p className="text-xs text-neutral-600">
-            Set in <code className="text-neutral-500">C:\Users\ashir\Claude Agent\.env</code> and <code className="text-neutral-500">frontend\.env.local</code>
-          </p>
-        </div>
-      </div>
-
       {/* System Info */}
       <div className="rounded-xl bg-neutral-900 border border-neutral-800 overflow-hidden">
         <div className="px-5 py-4 border-b border-neutral-800 flex items-center gap-2">
@@ -189,7 +191,7 @@ export default function SettingsPage() {
         <div className="divide-y divide-neutral-800/60">
           {[
             { label: "Skills", value: "6 skills operational" },
-            { label: "Pipeline", value: "npm run pipeline" },
+            { label: "Pipeline", value: "Signal-driven outbound" },
             { label: "Database", value: "Supabase (PostgreSQL)" },
             { label: "Framework", value: "Next.js 15 + TypeScript" },
           ].map(({ label, value }) => (

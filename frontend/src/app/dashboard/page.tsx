@@ -246,7 +246,7 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-xl font-bold text-white">Dashboard</h1>
           <p className="text-sm text-neutral-500 mt-0.5">
-            CirrusLabs GTM Engine · Signal-driven outbound
+            Signal-driven outbound campaigns
           </p>
         </div>
         <Link
