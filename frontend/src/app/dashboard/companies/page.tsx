@@ -116,25 +116,25 @@ export default function CompaniesPage() {
         <div>
           <h1 className="text-xl font-bold text-white">Companies</h1>
           <p className="text-sm text-neutral-500 mt-0.5">
-            {companies.length.toLocaleString()} discovered
+            {loading ? "Loading…" : `${companies.length.toLocaleString()} discovered`}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={handleCsvExport}
             disabled={filtered.length === 0}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-white text-sm font-medium transition-colors disabled:opacity-40"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-white text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Download className="h-3.5 w-3.5" />
-            CSV
+            {filtered.length > 0 ? `Export ${filtered.length.toLocaleString()} (CSV)` : "Export CSV"}
           </button>
           <button
             onClick={handleXlsxExport}
             disabled={filtered.length === 0}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-700/30 hover:bg-emerald-700/50 border border-emerald-700/50 text-emerald-300 text-sm font-medium transition-colors disabled:opacity-40"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-700/30 hover:bg-emerald-700/50 border border-emerald-700/50 text-emerald-300 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <FileSpreadsheet className="h-3.5 w-3.5" />
-            XLSX
+            {filtered.length > 0 ? `Export ${filtered.length.toLocaleString()} (XLSX)` : "Export XLSX"}
           </button>
         </div>
       </div>
@@ -144,13 +144,13 @@ export default function CompaniesPage() {
         {[
           {
             label: "Total Companies",
-            value: companies.length.toLocaleString(),
+            value: loading ? "—" : companies.length.toLocaleString(),
             icon: Building2,
             color: "bg-indigo-500/20",
           },
           {
             label: "With Hiring Signal",
-            value: companies
+            value: loading ? "—" : companies
               .filter((c) => c.evidence?.some((e) => e.type === "job_post"))
               .length.toLocaleString(),
             icon: Briefcase,
@@ -158,13 +158,13 @@ export default function CompaniesPage() {
           },
           {
             label: "ICP Qualified (170+)",
-            value: companies.filter((c) => c.fit_score >= 170).length.toLocaleString(),
+            value: loading ? "—" : companies.filter((c) => c.fit_score >= 170).length.toLocaleString(),
             icon: Globe,
             color: "bg-emerald-500/20",
           },
           {
             label: "US Companies",
-            value: companies
+            value: loading ? "—" : companies
               .filter((c) => c.country === "US" || !c.country)
               .length.toLocaleString(),
             icon: Users,
@@ -191,32 +191,43 @@ export default function CompaniesPage() {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500" />
         <input
           type="text"
-          placeholder="Search by name, domain, or industry..."
+          placeholder="Search by name, domain, or industry…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="w-full bg-neutral-900 border border-neutral-800 rounded-lg pl-10 pr-4 py-2.5 text-sm text-white placeholder-neutral-600 focus:outline-none focus:border-neutral-600 transition-colors"
         />
+        {search && (
+          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-neutral-500">
+            {filtered.length} result{filtered.length !== 1 ? "s" : ""}
+          </span>
+        )}
       </div>
 
       {/* Table */}
       <div className="rounded-xl bg-neutral-900 border border-neutral-800 overflow-hidden">
         {loading ? (
-          <div className="flex items-center justify-center py-20 text-neutral-500">
-            <Loader2 className="h-5 w-5 animate-spin mr-2" />
-            Loading companies...
+          <div className="flex flex-col items-center justify-center py-20 gap-3 text-neutral-500">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            <span className="text-sm">Loading companies…</span>
           </div>
         ) : filtered.length === 0 ? (
           <div className="py-20 text-center">
             <Building2 className="h-8 w-8 text-neutral-700 mx-auto mb-3" />
-            <p className="text-neutral-500 text-sm">
-              {search ? "No companies match your search." : "No companies yet."}
+            <p className="text-neutral-400 text-sm font-medium">
+              {search ? "No companies match your search" : "No companies discovered yet"}
             </p>
-            {!search && (
-              <p className="text-neutral-600 text-xs mt-1">
-                Run <code className="text-indigo-400">Skill 4</code> in the Pipeline tab to find
-                companies.
-              </p>
-            )}
+            <p className="text-neutral-600 text-xs mt-1">
+              {search ? (
+                <button
+                  onClick={() => setSearch("")}
+                  className="text-indigo-400 hover:underline"
+                >
+                  Clear search
+                </button>
+              ) : (
+                "Open a campaign and run Skill 4 to discover ICP-matched companies."
+              )}
+            </p>
           </div>
         ) : (
           <table className="w-full text-sm">
