@@ -497,7 +497,12 @@ export async function addContactsToSequence(
       await withRetry(
         () => client.post(`/emailer_campaigns/${sequenceId}/add_contact_ids`, {
           contact_ids: batch,
+          emailer_campaign_id: sequenceId,
           send_email_from_email_account_id: sendFromId,
+          sequence_no_email: true,
+          sequence_unverified_email: true,
+          sequence_active_in_other_campaigns: true,
+          sequence_finished_in_other_campaigns: true,
         }),
         { label: `apollo_enroll_batch_${batchNum}`, maxAttempts: 2 }
       );

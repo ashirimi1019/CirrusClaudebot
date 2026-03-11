@@ -65,7 +65,19 @@ export async function GET(request: NextRequest) {
   };
 
   const skill4 = campaign ? exists(offer, 'campaigns', campaign, 'leads', 'all_leads.csv') : false;
-  const skill5 = campaign ? exists(offer, 'campaigns', campaign, 'outreach', 'messages.csv') : false;
+  // Skill 5 may write messages.csv OR enroll directly in Apollo sequences.
+  // Check both file system and skill_runs table for completion.
+  let skill5 = campaign ? exists(offer, 'campaigns', campaign, 'outreach', 'messages.csv') : false;
+  if (!skill5 && campaignId) {
+    const { data: skill5Runs } = await sb
+      .from('skill_runs')
+      .select('id')
+      .eq('campaign_id', campaignId)
+      .eq('skill_number', 5)
+      .eq('status', 'success')
+      .limit(1);
+    skill5 = (skill5Runs?.length ?? 0) > 0;
+  }
   const skill6 = campaign ? exists(offer, 'campaigns', campaign, 'results', 'learnings.md') : false;
 
   return NextResponse.json({ skill1, skill2, skill3, skill4, skill5, skill6 });
