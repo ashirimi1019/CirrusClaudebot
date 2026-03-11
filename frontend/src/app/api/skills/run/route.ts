@@ -86,8 +86,12 @@ export async function GET(request: NextRequest) {
                   /* webpackChunkName: "skill-1" */
                   '@cirrus/skills/skill-1-new-offer'
                 );
-                // OfferConfig shape matches the 13-field form
-                await runSkill1NewOffer(formData as unknown as Parameters<typeof runSkill1NewOffer>[0]);
+                // OfferConfig shape matches the 13-field form.
+                // If formData is empty (pipeline re-run), fall back to offer slug as name.
+                const skill1Config = Object.keys(formData).length > 0
+                  ? formData
+                  : { name: offer };
+                await runSkill1NewOffer(skill1Config as unknown as Parameters<typeof runSkill1NewOffer>[0]);
                 break;
               }
 
