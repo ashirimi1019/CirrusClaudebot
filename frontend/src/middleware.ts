@@ -3,6 +3,11 @@ import { NextRequest, NextResponse } from 'next/server';
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  // Always allow auth callback through
+  if (pathname.startsWith('/auth/callback')) {
+    return NextResponse.next();
+  }
+
   // Check for Supabase auth token in cookies
   const hasSession = request.cookies.getAll().some(
     (c) => c.name.startsWith('sb-') && c.name.endsWith('-auth-token')
@@ -22,5 +27,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/login', '/signup'],
+  matcher: ['/dashboard/:path*', '/login', '/signup', '/auth/callback'],
 };
