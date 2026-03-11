@@ -51,8 +51,8 @@ export default function CompaniesPage() {
       .select("*, evidence(title, type, source)")
       .order("created_at", { ascending: false })
       .limit(200)
-      .then(({ data }) => {
-        if (data) setCompanies(data as Company[]);
+      .then(({ data }: { data: Company[] | null }) => {
+        if (data) setCompanies(data);
         setLoading(false);
       });
   }, []);

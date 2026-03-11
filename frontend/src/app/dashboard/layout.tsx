@@ -18,7 +18,7 @@ import {
 import { Sidebar, SidebarBody, SidebarLink } from "@/components/ui/sidebar";
 import { getUser, signOut } from "@/lib/auth";
 import { createClient } from "@/lib/supabase";
-import type { User } from "@supabase/supabase-js";
+import type { User, AuthChangeEvent, Session } from "@supabase/supabase-js";
 
 const navLinks = [
   {
@@ -109,7 +109,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
     // Listen for auth state changes
     const supabase = createClient();
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: AuthChangeEvent, session: Session | null) => {
       setUser(session?.user ?? null);
       if (!session) router.push("/login");
     });

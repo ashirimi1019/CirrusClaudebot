@@ -168,8 +168,8 @@ export default function CampaignDashboardPage() {
       .select('id, first_name, last_name, title, email')
       .limit(50)
       .then(
-        ({ data }) => {
-          setLeads((data ?? []) as Lead[]);
+        ({ data }: { data: Lead[] | null }) => {
+          setLeads(data ?? []);
           setLeadsLoading(false);
         },
         () => setLeadsLoading(false),

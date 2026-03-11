@@ -43,8 +43,8 @@ export default function ContactsPage() {
       .select("*, companies(name, domain)")
       .order("created_at", { ascending: false })
       .limit(500)
-      .then(({ data }) => {
-        if (data) setBuyers(data as Buyer[]);
+      .then(({ data }: { data: Buyer[] | null }) => {
+        if (data) setBuyers(data);
         setLoading(false);
       });
   }, []);
