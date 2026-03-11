@@ -2,10 +2,11 @@
 import React, { useEffect, useState } from "react";
 import {
   Users, Search, Mail, Linkedin, Calendar, Loader2,
-  ExternalLink, Building2, Copy, Check,
+  ExternalLink, Building2, Copy, Check, FileSpreadsheet, Download,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
+import { exportToXlsx } from "@/lib/export-xlsx";
 
 type Buyer = {
   id: string;
@@ -76,18 +77,43 @@ export default function ContactsPage() {
           <h1 className="text-xl font-bold text-white">Contacts</h1>
           <p className="text-sm text-neutral-500 mt-0.5">{buyers.length.toLocaleString()} decision-makers</p>
         </div>
-        <button
-          onClick={() => {
-            const csv = ["First Name,Last Name,Title,Company,Email,LinkedIn"]
-              .concat(filtered.map(b => `${b.first_name},${b.last_name},${b.title},${b.companies?.name ?? ""},${b.email},${b.linkedin_url ?? ""}`))
-              .join("\n");
-            const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-            const a = document.createElement("a"); a.href = url; a.download = "contacts.csv"; a.click();
-          }}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-white text-sm font-medium transition-colors"
-        >
-          Export CSV
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              const csv = ["First Name,Last Name,Title,Company,Domain,Email,LinkedIn"]
+                .concat(filtered.map(b => `${b.first_name},${b.last_name},${b.title},${b.companies?.name ?? ""},${b.companies?.domain ?? ""},${b.email},${b.linkedin_url ?? ""}`))
+                .join("\n");
+              const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+              const a = document.createElement("a"); a.href = url; a.download = "contacts.csv"; a.click();
+            }}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-white text-sm font-medium transition-colors"
+          >
+            <Download className="h-3.5 w-3.5" />
+            CSV
+          </button>
+          <button
+            onClick={() => {
+              exportToXlsx(
+                filtered.map(b => ({
+                  "First Name": b.first_name,
+                  "Last Name": b.last_name,
+                  "Title": b.title,
+                  "Company": b.companies?.name ?? "",
+                  "Domain": b.companies?.domain ?? "",
+                  "Email": b.email,
+                  "LinkedIn": b.linkedin_url ?? "",
+                  "Added": new Date(b.created_at).toLocaleDateString(),
+                })),
+                "contacts",
+                "Contacts",
+              );
+            }}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-700/30 hover:bg-emerald-700/50 border border-emerald-700/50 text-emerald-300 text-sm font-medium transition-colors"
+          >
+            <FileSpreadsheet className="h-3.5 w-3.5" />
+            XLSX
+          </button>
+        </div>
       </div>
 
       {/* KPIs */}

@@ -2,10 +2,7 @@
  * /api/skills/run
  *
  * Streams skill output back to the browser via Server-Sent Events.
- *
- * On LOCAL dev: identical to before — the existing local files are used directly.
- * On VERCEL:    skills are imported via webpack aliases (no child_process.spawn),
- *               writes land in /tmp/cirrus-work, and process.cwd() is patched.
+ * Every execution is logged to the `skill_runs` table in Supabase.
  *
  * Query params:
  *   skill    = 1–6 (required)
@@ -15,6 +12,7 @@
  */
 
 import { NextRequest } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 import { ConsoleCapture } from '@/lib/console-capture';
 import {
   withWriteDir,
@@ -26,6 +24,45 @@ import {
 export const maxDuration = 300;
 
 type FormData = Record<string, string>;
+
+function getServiceClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  );
+}
+
+async function resolveIds(
+  offerSlug: string,
+  campaignSlug: string,
+): Promise<{ offerId: string | null; campaignId: string | null }> {
+  const sb = getServiceClient();
+  let offerId: string | null = null;
+  let campaignId: string | null = null;
+
+  if (offerSlug) {
+    const { data: offerRows } = await sb
+      .from('offers')
+      .select('id')
+      .eq('slug', offerSlug)
+      .limit(1);
+    const rows = offerRows as { id: string }[] | null;
+    offerId = rows?.[0]?.id ?? null;
+  }
+
+  if (campaignSlug && offerId) {
+    const { data: campaignRows } = await sb
+      .from('campaigns')
+      .select('id')
+      .eq('offer_id', offerId)
+      .eq('slug', campaignSlug)
+      .limit(1);
+    const rows = campaignRows as { id: string }[] | null;
+    campaignId = rows?.[0]?.id ?? null;
+  }
+
+  return { offerId, campaignId };
+}
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -61,8 +98,59 @@ export async function GET(request: NextRequest) {
         }
       };
 
+      // Collect all log lines for persistence
+      const collectedLogs: string[] = [];
+
       // Capture console.log/warn/error and forward every line as an SSE event
-      const capture = new ConsoleCapture((line) => sendEvent({ type: 'log', text: line }));
+      const capture = new ConsoleCapture((line) => {
+        collectedLogs.push(line);
+        sendEvent({ type: 'log', text: line });
+      });
+
+      // ── Supabase skill_runs tracking ──────────────────────────────────────
+      const sb = getServiceClient();
+      const startedAt = Date.now();
+
+      // Resolve offer/campaign IDs for foreign keys
+      const { offerId, campaignId } = await resolveIds(offer, campaign);
+
+      // Insert a "running" row so the UI can see the run started
+      let runId: string | null = null;
+      try {
+        const { data: runRow } = await sb
+          .from('skill_runs')
+          .insert({
+            skill_number: skill,
+            status: 'running',
+            offer_id: offerId,
+            campaign_id: campaignId,
+            started_at: new Date(startedAt).toISOString(),
+          })
+          .select('id')
+          .single();
+        runId = runRow?.id ?? null;
+      } catch {
+        // Non-fatal: DB tracking failure should not block skill execution
+      }
+
+      const finaliseRun = async (exitCode: number) => {
+        if (!runId) return;
+        const finishedAt = Date.now();
+        try {
+          await sb
+            .from('skill_runs')
+            .update({
+              status: exitCode === 0 ? 'success' : 'failed',
+              exit_code: exitCode,
+              log_lines: collectedLogs,
+              finished_at: new Date(finishedAt).toISOString(),
+              duration_ms: finishedAt - startedAt,
+            })
+            .eq('id', runId);
+        } catch {
+          /* Non-fatal */
+        }
+      };
 
       try {
         capture.start();
@@ -86,8 +174,6 @@ export async function GET(request: NextRequest) {
                   /* webpackChunkName: "skill-1" */
                   '@cirrus/skills/skill-1-new-offer'
                 );
-                // OfferConfig shape matches the 13-field form.
-                // If formData is empty (pipeline re-run), fall back to offer slug as name.
                 const skill1Config = Object.keys(formData).length > 0
                   ? formData
                   : { name: offer };
@@ -100,7 +186,6 @@ export async function GET(request: NextRequest) {
                   /* webpackChunkName: "skill-2" */
                   '@cirrus/skills/skill-2-campaign-strategy'
                 );
-                // If formData is empty (pipeline re-run), fall back to campaign slug as name.
                 const skill2Config = Object.keys(formData).length > 0
                   ? formData
                   : { name: campaign };
@@ -157,13 +242,17 @@ export async function GET(request: NextRequest) {
           }
         });
 
+        await finaliseRun(0);
         sendEvent({ type: 'done', code: 0 });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         // process.exit(0) throws but is actually a clean success
         if (msg === 'Skill called process.exit(0)') {
+          await finaliseRun(0);
           sendEvent({ type: 'done', code: 0 });
         } else {
+          collectedLogs.push(`❌ ${msg}`);
+          await finaliseRun(1);
           sendEvent({ type: 'log', text: `❌ ${msg}` });
           sendEvent({ type: 'done', code: 1 });
         }
