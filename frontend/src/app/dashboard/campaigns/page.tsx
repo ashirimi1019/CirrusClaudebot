@@ -58,7 +58,7 @@ export default function CampaignsPage() {
       .from("campaigns")
       .select("*, campaign_metrics(*)")
       .order("created_at", { ascending: false })
-      .then(({ data }) => {
+      .then(({ data }: { data: Campaign[] | null }) => {
         if (data) setCampaigns(data as Campaign[]);
         setLoading(false);
       });
