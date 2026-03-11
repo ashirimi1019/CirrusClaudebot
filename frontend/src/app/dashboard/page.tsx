@@ -137,21 +137,29 @@ export default function DashboardPage() {
   useEffect(() => {
     const supabase = createClient();
 
-    // Load stats in parallel
-    Promise.all([
-      supabase.from("companies").select("id", { count: "exact", head: true }),
-      supabase.from("contacts").select("id", { count: "exact", head: true }),
-      supabase.from("campaigns").select("id, status", { count: "exact" }),
-    ]).then(([comp, cont, camps]) => {
-      const campData = camps.data ?? [];
-      setStats({
-        companies: comp.count ?? 0,
-        contacts: cont.count ?? 0,
-        campaigns: camps.count ?? 0,
-        activeCampaigns: campData.filter((c: { status: string }) => c.status === "active").length,
-      });
-      setStatsLoading(false);
-    });
+    // Load stats in parallel with error handling for intermittent 503s
+    async function loadStats() {
+      try {
+        const [comp, cont, camps] = await Promise.all([
+          supabase.from("companies").select("id", { count: "exact", head: true }),
+          supabase.from("contacts").select("id", { count: "exact", head: true }),
+          supabase.from("campaigns").select("id, status", { count: "exact" }),
+        ]);
+        const campData = camps.data ?? [];
+        setStats({
+          companies: comp.count ?? 0,
+          contacts: cont.count ?? 0,
+          campaigns: camps.count ?? 0,
+          activeCampaigns: campData.filter((c: { status: string }) => c.status === "active").length,
+        });
+      } catch {
+        // Gracefully handle intermittent Supabase 503s
+        console.warn("Failed to load dashboard stats, will retry on next mount");
+      } finally {
+        setStatsLoading(false);
+      }
+    }
+    loadStats();
 
     // Load recent campaigns with metrics
     supabase

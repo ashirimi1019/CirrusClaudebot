@@ -27,8 +27,9 @@ type CampaignWithMetrics = {
 };
 
 type ApiLog = {
-  tool: string;
-  status_code: number;
+  tool_name: string;
+  action_name: string | null;
+  estimated_cost: number;
   created_at: string;
 };
 
@@ -82,18 +83,25 @@ export default function AnalyticsPage() {
 
   useEffect(() => {
     const supabase = createClient();
-    Promise.all([
-      supabase.from("campaigns").select("id, name, slug, created_at, campaign_metrics(*)").order("created_at", { ascending: false }),
-      supabase.from("tool_usage").select("tool, status_code, created_at").order("created_at", { ascending: false }).limit(500),
-      supabase.from("companies").select("id", { count: "exact", head: true }),
-      supabase.from("contacts").select("id", { count: "exact", head: true }),
-    ]).then(([c, logs, comp, contacts]) => {
-      if (c.data) setCampaigns(c.data as CampaignWithMetrics[]);
-      if (logs.data) setApiLogs(logs.data as ApiLog[]);
-      setCompaniesCount(comp.count ?? 0);
-      setContactsCount(contacts.count ?? 0);
-      setLoading(false);
-    });
+    async function loadAnalytics() {
+      try {
+        const [c, logs, comp, contacts] = await Promise.all([
+          supabase.from("campaigns").select("id, name, slug, created_at, campaign_metrics(*)").order("created_at", { ascending: false }),
+          supabase.from("tool_usage").select("tool_name, action_name, estimated_cost, created_at").order("created_at", { ascending: false }).limit(500),
+          supabase.from("companies").select("id", { count: "exact", head: true }),
+          supabase.from("contacts").select("id", { count: "exact", head: true }),
+        ]);
+        if (c.data) setCampaigns(c.data as CampaignWithMetrics[]);
+        if (logs.data) setApiLogs(logs.data as ApiLog[]);
+        setCompaniesCount(comp.count ?? 0);
+        setContactsCount(contacts.count ?? 0);
+      } catch {
+        console.warn("Failed to load analytics data, will retry on next mount");
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadAnalytics();
   }, []);
 
   // Aggregate metrics across all campaigns using correct DB field names
@@ -106,7 +114,7 @@ export default function AnalyticsPage() {
 
   // API cost estimate
   const apiCallsByTool: Record<string, number> = {};
-  apiLogs.forEach((l) => { apiCallsByTool[l.tool] = (apiCallsByTool[l.tool] ?? 0) + 1; });
+  apiLogs.forEach((l) => { apiCallsByTool[l.tool_name] = (apiCallsByTool[l.tool_name] ?? 0) + 1; });
 
   // Funnel (using fields that exist in DB)
   const funnelSteps: FunnelStep[] = [
