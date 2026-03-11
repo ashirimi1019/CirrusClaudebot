@@ -370,9 +370,12 @@ export async function createSequence(name: string): Promise<ApolloSequence> {
 }
 
 /**
- * Add an email step to an existing sequence.
+ * Add an email step to an existing sequence and populate the template.
  * dayOffset = 1 means wait 1 day, 3 = wait 3 days, etc.
- * Note: Apollo requires wait_mode + exact_datetime fields alongside wait_time.
+ *
+ * IMPORTANT: Apollo's POST /emailer_steps creates a blank template — it ignores
+ * inline emailer_template content. We must follow up with PUT /emailer_templates/{id}
+ * to populate the subject and body.
  */
 export async function addEmailStepToSequence(
   sequenceId: string,
@@ -380,28 +383,105 @@ export async function addEmailStepToSequence(
   body: string,
   dayOffset: number = 1,
   position: number = 1
-): Promise<void> {
+): Promise<{ stepId: string; touchId: string; templateId: string }> {
   if (!sequenceId) throw new Error('addEmailStepToSequence: sequenceId is required');
   if (!subject || !body) throw new Error('addEmailStepToSequence: subject and body are required');
 
   const client = apolloClient();
 
-  await withRetry(
+  // Step 1: Create the step (this also creates a blank touch + template)
+  const stepRes = await withRetry(
     () => client.post('/emailer_steps', {
       emailer_campaign_id: sequenceId,
       position,
-      wait_time: Math.max(dayOffset, 1),  // Apollo requires positive integer
+      wait_time: Math.max(dayOffset, 1),
       wait_mode: 'day',
       exact_datetime: null,
       type: 'auto_email',
-      emailer_template: {
-        subject,
-        body_html: body.replace(/\n/g, '<br>'),
-        body_text: body,
-      },
     }),
     { label: `apollo_add_step_${position}`, maxAttempts: 2 }
   );
+
+  const stepId = stepRes.data.emailer_step?.id;
+  const touchId = stepRes.data.emailer_touch?.id;
+  const templateId = stepRes.data.emailer_template?.id;
+
+  if (!templateId) {
+    console.warn(`  ⚠️ Step ${position} created but no template ID returned — template content will be blank`);
+    return { stepId: stepId || '', touchId: touchId || '', templateId: '' };
+  }
+
+  // Step 2: Populate the template via PUT /emailer_templates/{id}
+  await withRetry(
+    () => client.put(`/emailer_templates/${templateId}`, {
+      subject,
+      body_html: body.replace(/\n/g, '<br>'),
+      body_text: body,
+    }),
+    { label: `apollo_update_template_${position}`, maxAttempts: 2 }
+  );
+
+  return { stepId: stepId || '', touchId: touchId || '', templateId };
+}
+
+/**
+ * Update an existing Apollo email template's subject + body.
+ * Used to fix blank templates on existing sequence steps.
+ */
+export async function updateEmailTemplate(
+  templateId: string,
+  subject: string,
+  body: string,
+): Promise<void> {
+  if (!templateId) throw new Error('updateEmailTemplate: templateId is required');
+  const client = apolloClient();
+
+  await withRetry(
+    () => client.put(`/emailer_templates/${templateId}`, {
+      subject,
+      body_html: body.replace(/\n/g, '<br>'),
+      body_text: body,
+    }),
+    { label: `apollo_update_template_${templateId.substring(0, 8)}`, maxAttempts: 2 }
+  );
+}
+
+/**
+ * Get sequence details including steps, touches, and templates.
+ * Returns the full sequence data needed to inspect/update templates.
+ */
+export async function getSequenceDetails(sequenceId: string): Promise<{
+  steps: Array<{ id: string; position: number; wait_time: number }>;
+  touches: Array<{ id: string; emailer_step_id: string; emailer_template_id: string; status: string }>;
+  templates: Array<{ id: string; subject: string | null; body_html: string; body_text: string }>;
+}> {
+  const client = apolloClient();
+
+  const res = await withRetry(
+    () => client.get(`/emailer_campaigns/${sequenceId}`),
+    { label: 'apollo_get_sequence_details', maxAttempts: 2 }
+  );
+
+  const data = res.data;
+  return {
+    steps: (data.emailer_steps || []).map((s: any) => ({
+      id: s.id,
+      position: s.position,
+      wait_time: s.wait_time,
+    })),
+    touches: (data.emailer_touches || []).map((t: any) => ({
+      id: t.id,
+      emailer_step_id: t.emailer_step_id,
+      emailer_template_id: t.emailer_template_id,
+      status: t.status,
+    })),
+    templates: (data.emailer_templates || []).map((t: any) => ({
+      id: t.id,
+      subject: t.subject,
+      body_html: t.body_html || '',
+      body_text: t.body_text || '',
+    })),
+  };
 }
 
 /**

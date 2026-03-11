@@ -15,6 +15,8 @@ import {
   bulkCreateContacts,
   addContactsToSequence,
   getEmailAccounts,
+  getSequenceDetails,
+  updateEmailTemplate,
   type ApolloSequence,
 } from '../../lib/clients/apollo.ts';
 import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
@@ -280,27 +282,25 @@ export async function runSkill5LaunchOutreach(
     }
     tracker.completeStep('Select/create sequence', `"${sequence.name}" (ID: ${sequence.id})`);
 
-    // ─── Step 4: Add email steps to sequence (if new sequence) ───
+    // ─── Step 4: Add email steps OR update blank templates ───
     tracker.startStep('Add email steps');
+    const dayOffsets = [0, 3, 7];
+
     if (sequence.num_steps === 0) {
-      // Day offsets: first email day 0, follow-ups day 3 and day 7
-      const dayOffsets = [0, 3, 7];
+      // New sequence — create steps and populate templates
       let stepFailures = 0;
 
       for (let i = 0; i < variants.length; i++) {
         const variant = variants[i];
-        const templateSubject = variant.subject;
-        const templateBody = variant.body;
-
         try {
-          await addEmailStepToSequence(
+          const result = await addEmailStepToSequence(
             sequence.id,
-            templateSubject,
-            templateBody,
+            variant.subject,
+            variant.body,
             dayOffsets[i] ?? (i * 3),
             i + 1
           );
-          console.log(`  ✅ Step ${i + 1}: "${templateSubject.substring(0, 50)}..." (day ${dayOffsets[i] ?? i * 3})`);
+          console.log(`  ✅ Step ${i + 1}: "${variant.subject.substring(0, 50)}..." (day ${dayOffsets[i] ?? i * 3}) [template: ${result.templateId}]`);
         } catch (stepErr: any) {
           stepFailures++;
           tracker.warn(`Failed to add email step ${i + 1}: ${stepErr.message}`);
@@ -313,10 +313,54 @@ export async function runSkill5LaunchOutreach(
       } else if (stepFailures > 0) {
         tracker.partialStep('Add email steps', `${stepsAdded}/${variants.length} steps added, ${stepFailures} failed`, stepsAdded);
       } else {
-        tracker.completeStep('Add email steps', `${stepsAdded} steps added`, stepsAdded);
+        tracker.completeStep('Add email steps', `${stepsAdded} steps created + templates populated`, stepsAdded);
       }
     } else {
-      tracker.completeStep('Add email steps', `Sequence already has ${sequence.num_steps} steps — skipped`);
+      // Existing sequence — check for blank templates and update them
+      console.log(`  → Sequence has ${sequence.num_steps} existing steps — checking templates...`);
+      try {
+        const details = await getSequenceDetails(sequence.id);
+        let blanks = 0;
+        let updated = 0;
+
+        // Match each touch/template to a variant by step position order
+        const sortedSteps = [...details.steps].sort((a, b) => a.position - b.position);
+
+        for (let i = 0; i < sortedSteps.length && i < variants.length; i++) {
+          const step = sortedSteps[i];
+          const touch = details.touches.find((t) => t.emailer_step_id === step.id);
+          if (!touch) continue;
+
+          const template = details.templates.find((t) => t.id === touch.emailer_template_id);
+          if (!template) continue;
+
+          // Check if template is blank (no subject or empty body)
+          if (!template.subject || !template.body_text) {
+            blanks++;
+            const variant = variants[i];
+            try {
+              await updateEmailTemplate(template.id, variant.subject, variant.body);
+              updated++;
+              console.log(`  ✅ Updated blank template for step ${i + 1}: "${variant.subject.substring(0, 50)}..."`);
+            } catch (updateErr: any) {
+              tracker.warn(`Failed to update template for step ${i + 1}: ${updateErr.message}`);
+            }
+          } else {
+            console.log(`  ℹ️  Step ${i + 1} template already has content: "${template.subject?.substring(0, 40)}..."`);
+          }
+        }
+
+        if (blanks === 0) {
+          tracker.completeStep('Add email steps', `All ${sortedSteps.length} steps already have template content`);
+        } else if (updated === blanks) {
+          tracker.completeStep('Add email steps', `${updated} blank templates populated (${sortedSteps.length} steps total)`);
+        } else {
+          tracker.partialStep('Add email steps', `${updated}/${blanks} blank templates updated`, updated);
+        }
+      } catch (detailErr: any) {
+        tracker.warn(`Could not check existing templates: ${detailErr.message}`);
+        tracker.completeStep('Add email steps', `Sequence has ${sequence.num_steps} steps — could not verify template content`);
+      }
     }
 
     // ─── Step 5: Create contacts in Apollo ───
