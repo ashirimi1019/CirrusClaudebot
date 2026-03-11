@@ -48,7 +48,8 @@ export async function runSkill6CampaignReview(
   console.log('SKILL 6: CAMPAIGN REVIEW (Apollo Analytics)');
   console.log('========================================\n');
 
-  const autoMode = !!(config?.autoMode);
+  const cliMode = !!(process.argv[2] && process.argv[3] && !config);
+  const autoMode = !!(config?.autoMode || cliMode);
   const rl = autoMode ? null : createReadlineInterface();
 
   try {

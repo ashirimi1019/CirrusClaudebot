@@ -333,3 +333,17 @@ That's the agent flywheel.
 - **Best variant:** email-variant-1
 - **Best buyer title:** CTO
 - **Key learning:** Open rate: 0%, Reply rate: 0%
+
+
+---
+
+## Campaign: hiring-ai-data-cloud-software-cyber-engineers-q1-2026 (3/11/2026)
+
+- **Sequence:** CirrusLabs - hiring-ai-data-cloud-software-cyber-engineers-q1-2026
+- **Emails sent:** 0
+- **Open rate:** 0.0%
+- **Reply rate:** 0%
+- **Meetings booked:** 0
+- **Best variant:** email-variant-1
+- **Best buyer title:** CTO
+- **Key learning:** Open rate: 0.0%, Reply rate: 0%

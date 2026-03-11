@@ -140,7 +140,9 @@ export async function runSkill5LaunchOutreach(
 
   let offerSlug: string;
   let campaignSlug: string;
-  const autoMode = !!(config?.autoCreateSequence || config?.apolloSequenceId);
+  // Auto mode if: config provided, or running from CLI with args (non-interactive)
+  const cliMode = !!(process.argv[2] && process.argv[3]);
+  const autoMode = !!(config?.autoCreateSequence || config?.apolloSequenceId || cliMode);
   const rl = autoMode ? null : createReadlineInterface();
 
   if (offerSlugArg && campaignSlugArg) {
@@ -285,27 +287,46 @@ export async function runSkill5LaunchOutreach(
     console.log(`\n🚀 Enrolling contacts in sequence "${sequence.name}"...`);
 
     // Check email accounts
-    const emailAccounts = await getEmailAccounts();
-    if (emailAccounts.length === 0) {
-      throw new Error('No email accounts connected in Apollo. Go to Apollo Settings → Email Accounts and connect a mailbox first.');
-    }
-    const activeAccount = emailAccounts.find((a) => a.active);
-    console.log(`  → Sending from: ${activeAccount?.email || emailAccounts[0].email}`);
+    let enrollmentSuccess = false;
+    let sendingEmail = 'N/A';
+    try {
+      const emailAccounts = await getEmailAccounts();
+      if (emailAccounts.length === 0) {
+        console.warn('⚠️  No email accounts connected in Apollo.');
+        console.warn('   → Contacts created and sequence ready, but enrollment skipped.');
+        console.warn('   → Go to Apollo Settings → Email Accounts → Connect a mailbox');
+        console.warn('   → Then manually add contacts to the sequence in Apollo UI');
+      } else {
+        const activeAccount = emailAccounts.find((a) => a.active);
+        sendingEmail = activeAccount?.email || emailAccounts[0].email;
+        console.log(`  → Sending from: ${sendingEmail}`);
 
-    await addContactsToSequence(contactIds, sequence.id, activeAccount?.id || emailAccounts[0].id);
+        await addContactsToSequence(contactIds, sequence.id, activeAccount?.id || emailAccounts[0].id);
+        enrollmentSuccess = true;
+      }
+    } catch (enrollErr: any) {
+      console.warn(`⚠️  Enrollment failed: ${enrollErr.message}`);
+      console.warn('   → Contacts created and sequence ready, but enrollment skipped.');
+      console.warn('   → You can manually enroll contacts in Apollo UI.');
+    }
 
     if (rl) rl.close();
 
     console.log('\n========================================');
-    console.log('✅ SKILL 5 COMPLETE');
+    console.log(enrollmentSuccess ? '✅ SKILL 5 COMPLETE' : '⚠️  SKILL 5 PARTIALLY COMPLETE');
     console.log('========================================');
-    console.log(`\nLaunched:`);
-    console.log(`  Contacts enrolled:  ${contactIds.length}`);
+    console.log(`\nResults:`);
+    console.log(`  Contacts created:   ${contactIds.length}`);
     console.log(`  Sequence:           "${sequence.name}"`);
     console.log(`  Sequence ID:        ${sequence.id}`);
-    console.log(`  Email steps:        ${variants.length}`);
-    console.log(`  Sending from:       ${activeAccount?.email || 'Apollo default'}`);
-    console.log(`\nApollo will send the sequence automatically based on your settings.`);
+    console.log(`  Email steps:        ${sequence.num_steps > 0 ? sequence.num_steps : variants.length}`);
+    console.log(`  Enrolled:           ${enrollmentSuccess ? contactIds.length : '0 (no email account)'}`);
+    console.log(`  Sending from:       ${sendingEmail}`);
+    if (enrollmentSuccess) {
+      console.log(`\nApollo will send the sequence automatically based on your settings.`);
+    } else {
+      console.log(`\n⚠️  To complete: Connect an email account in Apollo, then enroll contacts manually.`);
+    }
     console.log(`\nNext: Wait 7-14 days, then run Skill 6 to analyze results`);
     console.log(`  npm run skill:6`);
     console.log(`  (Save this sequence ID for Skill 6: ${sequence.id})`);

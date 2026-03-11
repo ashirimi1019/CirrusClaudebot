@@ -64,6 +64,9 @@ export interface ApolloCompany {
   funding_stage: string | null;
   estimated_num_employees: number | null;
   keywords: string[];
+  primary_domain?: string | null;
+  revenue?: number | null;
+  founded_year?: number | null;
 }
 
 export interface ApolloPerson {
@@ -149,15 +152,18 @@ export async function searchCompaniesByHiringRoles(
 ): Promise<ApolloCompany[]> {
   const client = apolloClient();
 
-  // Build keyword query from roles (e.g., "Data Engineer OR ML Engineer")
-  const keywordQuery = roles.join(' OR ');
-
-  const payload = {
-    q_organization_keyword_tags: roles,
-    num_employees_ranges: employeeRanges,
+  // Use job title search to find companies actively hiring these roles
+  const payload: Record<string, any> = {
+    q_organization_job_titles: roles,
+    organization_num_employees_ranges: employeeRanges,
     page: 1,
     per_page: perPage,
   };
+
+  // Add location filter if provided
+  if (locations.length > 0) {
+    payload.organization_locations = locations;
+  }
 
   try {
     console.log(`  → Apollo company search: roles=[${roles.join(', ')}]`);
@@ -169,16 +175,20 @@ export async function searchCompaniesByHiringRoles(
     const companies: ApolloCompany[] = (data.organizations || []).map((org: any) => ({
       id: org.id,
       name: org.name,
-      website_url: org.website_url || null,
+      website_url: org.website_url || org.primary_domain ? `http://${org.primary_domain}` : null,
       linkedin_url: org.linkedin_url || null,
       employee_count: org.estimated_num_employees || org.num_employees || null,
-      industry: org.industry || null,
+      industry: org.industry || org.sic_codes?.[0] || null,
       city: org.city || null,
       state: org.state || null,
       country: org.country || null,
-      funding_stage: org.latest_funding_stage || null,
+      funding_stage: org.latest_funding_stage || (org.publicly_traded_symbol ? 'ipo' : null),
       estimated_num_employees: org.estimated_num_employees || null,
-      keywords: org.keywords || [],
+      keywords: org.keywords || org.sic_codes || [],
+      // Extra fields from mixed_companies/search
+      primary_domain: org.primary_domain || null,
+      revenue: org.organization_revenue || null,
+      founded_year: org.founded_year || null,
     }));
 
     console.log(`  ✅ Found ${companies.length} companies`);
@@ -196,6 +206,12 @@ export async function searchCompaniesByHiringRoles(
 
 /**
  * Find decision-makers at specific companies by Apollo organization IDs.
+ *
+ * Uses 2-step flow:
+ *  1. /mixed_people/api_search — discover people (returns IDs, first names, titles)
+ *  2. /people/match — enrich each person (returns email, full name, linkedin)
+ *
+ * Note: /mixed_people/search was deprecated by Apollo in early 2026.
  */
 export async function searchDecisionMakers(
   organizationIds: string[],
@@ -215,38 +231,60 @@ export async function searchDecisionMakers(
 
   const client = apolloClient();
 
-  const payload = {
+  // Step 1: Search for people (new endpoint — returns limited data)
+  const searchPayload = {
     organization_ids: organizationIds,
     person_titles: titles,
-    contact_email_status: ['verified', 'likely to engage', 'unavailable'],
     page: 1,
     per_page: perPage,
   };
 
+  let candidates: any[] = [];
   try {
-    const response = await client.post('/mixed_people/search', payload);
-    const data = response.data;
+    const response = await client.post('/mixed_people/api_search', searchPayload);
+    candidates = response.data.people || [];
 
-    await logApiCall('apollo_people_search', 0.01, { org_count: organizationIds.length }, { count: data.people?.length });
-
-    const people: ApolloPerson[] = (data.people || []).map((p: any) => ({
-      id: p.id,
-      first_name: p.first_name || '',
-      last_name: p.last_name || '',
-      name: p.name || '',
-      title: p.title || null,
-      email: p.email || null,
-      email_status: p.email_status || null,
-      linkedin_url: p.linkedin_url || null,
-      organization_id: p.organization_id || null,
-      organization_name: p.organization?.name || p.organization_name || null,
-    }));
-
-    return people;
+    await logApiCall('apollo_people_api_search', 0.01, { org_count: organizationIds.length }, { count: candidates.length });
   } catch (err: any) {
-    const msg = err.response?.data?.message || err.message;
+    const msg = err.response?.data?.error || err.response?.data?.message || err.message;
     throw new Error(`Apollo people search failed: ${msg}`);
   }
+
+  if (candidates.length === 0) return [];
+
+  // Step 2: Enrich each candidate to get email + full name + linkedin
+  const enriched: ApolloPerson[] = [];
+
+  for (const candidate of candidates) {
+    if (!candidate.id) continue;
+
+    try {
+      const enrichResp = await client.post('/people/match', { id: candidate.id });
+      const p = enrichResp.data.person;
+
+      if (p) {
+        enriched.push({
+          id: p.id,
+          first_name: p.first_name || candidate.first_name || '',
+          last_name: p.last_name || '',
+          name: p.name || `${p.first_name || ''} ${p.last_name || ''}`.trim(),
+          title: p.title || candidate.title || null,
+          email: p.email || null,
+          email_status: p.email_status || null,
+          linkedin_url: p.linkedin_url || null,
+          organization_id: p.organization_id || null,
+          organization_name: p.organization?.name || p.organization_name || null,
+        });
+
+        await logApiCall('apollo_people_enrich', 0.03, { person_id: candidate.id }, { email: !!p.email });
+      }
+    } catch (err: any) {
+      // Non-fatal: skip person if enrichment fails
+      console.warn(`    ⚠️ Enrichment failed for ${candidate.first_name || 'unknown'}: ${err.response?.data?.error || err.message}`);
+    }
+  }
+
+  return enriched;
 }
 
 // ─────────────────────────────────────────────
@@ -256,22 +294,23 @@ export async function searchDecisionMakers(
 
 /**
  * List all email sequences (campaigns) in Apollo.
+ * Note: GET /emailer_campaigns is deprecated (404). Use POST /emailer_campaigns/search instead.
  */
 export async function listSequences(): Promise<ApolloSequence[]> {
   const client = apolloClient();
   try {
-    const response = await client.get('/emailer_campaigns?per_page=50');
+    const response = await client.post('/emailer_campaigns/search', { per_page: '50' });
     const data = response.data;
     return (data.emailer_campaigns || []).map((c: any) => ({
       id: c.id,
       name: c.name,
-      active: c.active,
-      num_steps: c.num_steps || 0,
-      num_contacts: c.num_contacts || 0,
+      active: c.active !== false,
+      num_steps: c.num_steps || c.emailer_steps_count || 0,
+      num_contacts: c.num_contacts || c.contacts_count || 0,
       created_at: c.created_at,
     }));
   } catch (err: any) {
-    const msg = err.response?.data?.message || err.message;
+    const msg = err.response?.data?.error || err.response?.data?.message || err.message;
     throw new Error(`Apollo list sequences failed: ${msg}`);
   }
 }
@@ -303,13 +342,14 @@ export async function createSequence(name: string): Promise<ApolloSequence> {
 
 /**
  * Add an email step to an existing sequence.
- * dayOffset = 0 means send immediately, 3 = wait 3 days, etc.
+ * dayOffset = 1 means wait 1 day, 3 = wait 3 days, etc.
+ * Note: Apollo requires wait_mode + exact_datetime fields alongside wait_time.
  */
 export async function addEmailStepToSequence(
   sequenceId: string,
   subject: string,
   body: string,
-  dayOffset: number = 0,
+  dayOffset: number = 1,
   position: number = 1
 ): Promise<void> {
   const client = apolloClient();
@@ -317,7 +357,9 @@ export async function addEmailStepToSequence(
     await client.post('/emailer_steps', {
       emailer_campaign_id: sequenceId,
       position,
-      wait_time: dayOffset,
+      wait_time: Math.max(dayOffset, 1),  // Apollo requires positive integer
+      wait_mode: 'day',
+      exact_datetime: null,
       type: 'auto_email',
       emailer_template: {
         subject,
@@ -326,7 +368,7 @@ export async function addEmailStepToSequence(
       },
     });
   } catch (err: any) {
-    const msg = err.response?.data?.message || err.message;
+    const msg = err.response?.data?.error || err.response?.data?.message || err.message;
     throw new Error(`Apollo add sequence step failed: ${msg}`);
   }
 }
@@ -360,7 +402,13 @@ export async function bulkCreateContacts(contacts: ContactInput[]): Promise<Apol
       });
 
       const data = response.data;
-      const created: ApolloContact[] = (data.contacts || []).map((c: any) => ({
+      // Bulk create returns { created_contacts: [...], existing_contacts: [...] }
+      const rawContacts = [
+        ...(data.created_contacts || []),
+        ...(data.existing_contacts || []),
+        ...(data.contacts || []),  // fallback
+      ];
+      const created: ApolloContact[] = rawContacts.map((c: any) => ({
         id: c.id,
         first_name: c.first_name || '',
         last_name: c.last_name || '',
@@ -466,7 +514,9 @@ export async function getSequenceReplies(sequenceId: string, perPage: number = 5
       sentiment: m.sentiment || null,
     }));
   } catch (err: any) {
-    const msg = err.response?.data?.message || err.message;
+    // 404 is expected when no messages have been sent yet
+    if (err.response?.status === 404) return [];
+    const msg = err.response?.data?.error || err.response?.data?.message || err.message;
     throw new Error(`Apollo get replies failed: ${msg}`);
   }
 }

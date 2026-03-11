@@ -7,6 +7,7 @@ export async function upsertCompany(data: {
   funding_stage?: string | null;
   industry?: string | null;
   country?: string;
+  fit_score?: number;
 }): Promise<Company> {
   const sb = getSupabaseClient();
 
@@ -19,6 +20,7 @@ export async function upsertCompany(data: {
       funding_stage: data.funding_stage || null,
       industry: data.industry || null,
       country: data.country || 'US',
+      fit_score: data.fit_score ?? 0,
     }, { onConflict: 'domain' })
     .select()
     .single();

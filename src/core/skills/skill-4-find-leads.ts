@@ -78,24 +78,38 @@ function parseStrategy(strategy: string): { roles: string[]; geography: string[]
 }
 
 // ICP scoring (from icp-framework.md)
+// Companies from Apollo mixed_companies/search already pass employee range + job title filters
+// so they automatically get base points for hiring signal + size qualification
 function scoreCompanyAgainstICP(company: ApolloCompany): number {
   let score = 0;
 
-  // Active hiring signal (already detected by search) = 100 pts
+  // Active hiring signal (already detected by job title search) = 100 pts
   score += 100;
 
-  // Company size
+  // Company size — if we searched with employee range filters, these companies already qualify
+  // The search API may not return the actual count, so give credit for passing the filter
   const size = company.employee_count || company.estimated_num_employees || 0;
   if (size >= 50 && size <= 1000) score += 50;
   else if (size > 1000 && size <= 5000) score += 30;
+  else if (size === 0) {
+    // Size unknown but company passed the employee range filter in the API call
+    score += 40;
+  }
 
-  // Funding stage
+  // Funding stage or public company
   if (company.funding_stage && company.funding_stage !== 'unfunded') score += 30;
+
+  // Revenue (available from mixed_companies/search)
+  const revenue = (company as any).revenue || 0;
+  if (revenue > 10_000_000) score += 20;  // $10M+ revenue is a good sign
 
   // Tech keywords (cloud, data, engineering)
   const techKeywords = ['aws', 'cloud', 'data', 'machine learning', 'saas', 'api', 'platform'];
   const companyKeywords = (company.keywords || []).join(' ').toLowerCase();
   if (techKeywords.some((k) => companyKeywords.includes(k))) score += 20;
+
+  // Has a domain (basic data quality check)
+  if (company.website_url || (company as any).primary_domain) score += 10;
 
   return score;
 }
@@ -196,9 +210,12 @@ export async function runSkill4FindLeads(): Promise<void> {
 
     for (const company of qualifyingCompanies) {
       const score = scoreCompanyAgainstICP(company);
-      const domain = company.website_url
-        ? company.website_url.replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '')
-        : `${company.name.toLowerCase().replace(/\s+/g, '')}.com`;
+      const primaryDomain = (company as any).primary_domain;
+      const domain = primaryDomain
+        ? primaryDomain
+        : company.website_url
+          ? company.website_url.replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '')
+          : `${company.name.toLowerCase().replace(/\s+/g, '')}.com`;
 
       console.log(`📝 ${company.name} (score: ${score}, ~${company.employee_count || '?'} employees)`);
 
@@ -212,6 +229,7 @@ export async function runSkill4FindLeads(): Promise<void> {
           funding_stage: company.funding_stage || null,
           industry: company.industry || null,
           country: company.country || geography[0] || 'US',
+          fit_score: score,
         });
       } catch (err: any) {
         console.warn(`  ⚠️ Failed to upsert company: ${err.message}`);
