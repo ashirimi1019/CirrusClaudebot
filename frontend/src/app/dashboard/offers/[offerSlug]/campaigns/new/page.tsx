@@ -93,7 +93,7 @@ export default function NewCampaignPage() {
     2,
     offerSlug,
     '',
-    form as unknown as Record<string, string>,
+    { ...form, name: form.campaignName } as unknown as Record<string, string>,
   );
 
   const handleSubmit = (e: React.FormEvent) => {
