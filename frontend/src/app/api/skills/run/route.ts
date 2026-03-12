@@ -207,7 +207,7 @@ export async function GET(request: NextRequest) {
   const fdParam = searchParams.get('formData');
   if (fdParam) {
     try {
-      formData = JSON.parse(decodeURIComponent(fdParam));
+      formData = JSON.parse(fdParam);
     } catch {
       /* ignore malformed JSON */
     }

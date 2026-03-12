@@ -216,7 +216,7 @@ function PipelineSection() {
       cmd: "npm run skill:6 -- offer campaign",
       label: "Review results after 14 days",
     },
-    { cmd: "npm run sheets:sync", label: "Export to Google Sheets" },
+    { cmd: "npm run skill:5 -- offer campaign", label: "Export outreach to Apollo" },
   ];
 
   return (
@@ -248,7 +248,7 @@ function PipelineSection() {
             {[
               "Skip if output already exists",
               "Apollo sequences auto-created",
-              "Supabase + Google Sheets updated",
+              "Supabase + XLSX export updated",
               "Learnings fed back into prompts",
             ].map((item) => (
               <li key={item} className="flex items-center gap-3 text-white/60">
@@ -321,7 +321,7 @@ function TechStack() {
     { name: "Apollo.io", role: "Signal detection · Sequences · Analytics" },
     { name: "OpenAI", role: "ICP scoring · Copy generation · Reply classification" },
     { name: "Supabase", role: "Companies · Contacts · Campaign data" },
-    { name: "Google Sheets", role: "Stakeholder visibility · Export" },
+    { name: "XLSX Export", role: "Client-side spreadsheet export" },
   ];
 
   return (

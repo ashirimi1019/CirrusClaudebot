@@ -92,8 +92,8 @@ export default function OfferDetailPage() {
             <p className="text-xs text-gray-500">Run Skill 2</p>
           </div>
         </Link>
-        <a
-          href={`/api/skills/status?offer=${offerSlug}`}
+        <Link
+          href={`/api/artifacts?offer=${offerSlug}&skill=1`}
           target="_blank"
           rel="noreferrer"
           className="flex items-center gap-3 p-4 bg-neutral-900 border border-neutral-800 hover:border-neutral-600 rounded-xl transition-all group"
@@ -102,10 +102,10 @@ export default function OfferDetailPage() {
             <FileText className="h-4 w-4 text-gray-400" />
           </div>
           <div>
-            <p className="text-sm font-medium text-gray-300">Positioning File</p>
-            <p className="text-xs text-gray-500">View positioning.md</p>
+            <p className="text-sm font-medium text-gray-300">Positioning Artifacts</p>
+            <p className="text-xs text-gray-500">View Skill 1 outputs</p>
           </div>
-        </a>
+        </Link>
       </div>
 
       {/* Campaigns list */}

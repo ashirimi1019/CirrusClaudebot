@@ -44,11 +44,11 @@ const integrations: Integration[] = [
     status: "connected",
   },
   {
-    name: "Google Sheets",
-    description: "Stakeholder visibility and campaign export",
+    name: "XLSX Export",
+    description: "Client-side spreadsheet export for companies and contacts",
     icon: FileSpreadsheet,
     color: "bg-amber-500/20 text-amber-400",
-    docs: "https://developers.google.com/sheets/api",
+    docs: "https://docs.sheetjs.com/",
     status: "connected",
   },
 ];

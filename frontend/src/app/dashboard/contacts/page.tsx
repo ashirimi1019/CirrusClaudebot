@@ -67,19 +67,36 @@ export default function ContactsPage() {
   });
 
   const handleCsvExport = () => {
+    const csvEscape = (val: string | number | null | undefined): string => {
+      const s = String(val ?? "");
+      if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    };
     const csv = ["First Name,Last Name,Title,Company,Domain,Email,LinkedIn"]
       .concat(
         filtered.map(
           (b) =>
-            `${b.first_name},${b.last_name},${b.title},${b.companies?.name ?? ""},${b.companies?.domain ?? ""},${b.email},${b.linkedin_url ?? ""}`,
+            [
+              csvEscape(b.first_name),
+              csvEscape(b.last_name),
+              csvEscape(b.title),
+              csvEscape(b.companies?.name),
+              csvEscape(b.companies?.domain),
+              csvEscape(b.email),
+              csvEscape(b.linkedin_url),
+            ].join(","),
         ),
       )
       .join("\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const bom = "\uFEFF";
+    const url = URL.createObjectURL(new Blob([bom + csv], { type: "text/csv;charset=utf-8" }));
     const a = document.createElement("a");
     a.href = url;
     a.download = "contacts.csv";
     a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleXlsxExport = () => {

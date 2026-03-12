@@ -103,6 +103,14 @@ export interface CampaignCompany {
   fit_score: number;
   included: boolean;
   exclusion_reason: string | null;
+  segment_key: string | null;
+  offer_type: string | null;
+  service_line: string | null;
+  buyer_persona_angle: string | null;
+  contact_rationale: string | null;
+  intelligence_confidence: number | null;
+  needs_review: boolean | null;
+  outreach_intelligence_id: string | null;
   created_at: string;
 }
 
@@ -117,6 +125,7 @@ export interface MessageVariant {
   subject_line: string | null;
   body: string | null;
   framework_used: string | null;
+  segment_key: string | null;
   created_at: string;
 }
 
@@ -194,6 +203,38 @@ export interface ReplySentiment {
   sentiment: 'positive' | 'negative' | 'objection' | 'referral' | 'ooo' | 'unknown';
   confidence: number | null;
   raw_classification: Record<string, unknown> | null;
+  created_at: string;
+}
+
+// ─── Outreach Intelligence ───────────────────────────────────────────────────
+
+export interface OutreachIntelligence {
+  id: string;
+  campaign_id: string;
+  company_id: string | null;
+  offer_type: string;
+  service_line: string;
+  segment_key: string;
+  messaging_angle: string | null;
+  rationale: string | null;
+  confidence: number | null;
+  needs_review: boolean | null;
+  fallback_applied: boolean | null;
+  raw_classification: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface GeneratedArtifact {
+  id: string;
+  user_id: string | null;
+  campaign_id: string | null;
+  skill_run_id: string | null;
+  skill_id: string | null;
+  artifact_name: string;
+  artifact_type: string | null;
+  file_path: string | null;
+  segment_key: string | null;
+  metadata: Record<string, unknown> | null;
   created_at: string;
 }
 

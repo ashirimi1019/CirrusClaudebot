@@ -48,8 +48,9 @@ export function useSkillRunner(
     });
 
     // Encode extra params (form data for Skills 1–2) as a JSON blob
+    // Note: URLSearchParams already URL-encodes values, so we only JSON.stringify here
     if (extraParams && Object.keys(extraParams).length > 0) {
-      params.set('formData', encodeURIComponent(JSON.stringify(extraParams)));
+      params.set('formData', JSON.stringify(extraParams));
     }
 
     const url = `/api/skills/run?${params.toString()}`;

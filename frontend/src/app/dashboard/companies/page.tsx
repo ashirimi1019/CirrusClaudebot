@@ -69,26 +69,35 @@ export default function CompaniesPage() {
   );
 
   const handleCsvExport = () => {
+    const csvEscape = (val: string | number | null | undefined): string => {
+      const s = String(val ?? "");
+      if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    };
     const csv = [
       "Company,Domain,Industry,Employees,Funding Stage,Country,ICP Score,Signals",
       ...filtered.map((c) =>
         [
-          c.name ?? "",
-          c.domain,
-          c.industry ?? "",
-          c.employee_count ?? c.company_size ?? "",
-          c.funding_stage ?? "",
-          c.country ?? "US",
-          c.fit_score,
-          c.evidence?.map((e) => e.type).join("; ") ?? "",
+          csvEscape(c.name),
+          csvEscape(c.domain),
+          csvEscape(c.industry),
+          csvEscape(c.employee_count ?? c.company_size),
+          csvEscape(c.funding_stage),
+          csvEscape(c.country ?? "US"),
+          csvEscape(c.fit_score),
+          csvEscape(c.evidence?.map((e) => e.type).join("; ")),
         ].join(","),
       ),
     ].join("\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const bom = "\uFEFF";
+    const url = URL.createObjectURL(new Blob([bom + csv], { type: "text/csv;charset=utf-8" }));
     const a = document.createElement("a");
     a.href = url;
     a.download = "companies.csv";
     a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleXlsxExport = () => {

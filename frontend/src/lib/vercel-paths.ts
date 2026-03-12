@@ -100,10 +100,10 @@ function copyDirRecursive(src: string, dst: string): void {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getAdminClient(): Promise<any | null> {
-  const url = process.env.SUPABASE_URL;
+  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   // Prefer service role key (bypasses RLS); fall back to anon key for reads
   const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) return null;
   const { createClient } = await import('@supabase/supabase-js');
   return createClient(url, key);

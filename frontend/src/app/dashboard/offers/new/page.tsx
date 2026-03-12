@@ -106,18 +106,13 @@ export default function NewOfferPage() {
   };
 
   // Auto-redirect to offers list after success
+  // Redirect to the list page rather than guessing the slug — the backend
+  // may slugify differently (e.g. add a numeric suffix for duplicates).
   React.useEffect(() => {
     if (exitCode === 0) {
-      const slug = form.name
-        .toLowerCase()
-        .replace(/[^\w\s-]/g, '')
-        .trim()
-        .replace(/\s+/g, '-')
-        .replace(/-+/g, '-')
-        .substring(0, 100);
-      setTimeout(() => router.push(`/dashboard/offers/${slug}`), 1500);
+      setTimeout(() => router.push('/dashboard/offers'), 1500);
     }
-  }, [exitCode, form.name, router]);
+  }, [exitCode, router]);
 
   return (
     <div className="p-8 max-w-2xl mx-auto">

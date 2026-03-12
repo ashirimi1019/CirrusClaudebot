@@ -42,7 +42,15 @@ export async function GET(
     return NextResponse.json({ error: 'Artifact not found' }, { status: 404 });
   }
 
-  const fullPath = path.join(WRITE_BASE, artifact.file_path);
+  // Resolve the full path and guard against path traversal attacks.
+  // path.resolve normalises ".." segments so we can verify the result
+  // stays inside WRITE_BASE.
+  const resolvedBase = path.resolve(WRITE_BASE);
+  const fullPath = path.resolve(WRITE_BASE, artifact.file_path);
+
+  if (!fullPath.startsWith(resolvedBase + path.sep) && fullPath !== resolvedBase) {
+    return NextResponse.json({ error: 'Invalid file path' }, { status: 400 });
+  }
 
   if (!fs.existsSync(fullPath)) {
     return NextResponse.json(
@@ -54,10 +62,13 @@ export async function GET(
   const content = fs.readFileSync(fullPath, 'utf-8');
   const contentType = CONTENT_TYPES[artifact.file_type] ?? 'text/plain; charset=utf-8';
 
+  // Sanitise filename for Content-Disposition header (strip quotes & control chars)
+  const safeName = (artifact.file_name || 'artifact').replace(/["\\]/g, '_').replace(/[\x00-\x1f]/g, '');
+
   return new Response(content, {
     headers: {
       'Content-Type': contentType,
-      'Content-Disposition': `inline; filename="${artifact.file_name}"`,
+      'Content-Disposition': `inline; filename="${safeName}"`,
     },
   });
 }

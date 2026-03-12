@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -22,6 +22,9 @@ import {
   Download,
   FileText,
   FileSpreadsheet,
+  Brain,
+  AlertTriangle,
+  Filter,
 } from 'lucide-react';
 import { PipelineStepper, StatusData } from '@/components/ui/pipeline-stepper';
 import { LogPanel } from '@/components/ui/log-panel';
@@ -39,6 +42,41 @@ interface CampaignLead {
   fit_score: number;
   outreach_status: string;
   companies: { name: string; domain: string; fit_score: number } | null;
+  segment_key?: string | null;
+  buyer_persona_angle?: string | null;
+  needs_review?: boolean | null;
+  intelligence_confidence?: number | null;
+}
+
+interface IntelligenceRow {
+  id: string;
+  company_id: string | null;
+  offer_type: string;
+  service_line: string;
+  segment_key: string;
+  messaging_angle: string | null;
+  rationale: string | null;
+  confidence: number | null;
+  needs_review: boolean | null;
+  fallback_applied: boolean | null;
+  companies: { id: string; name: string; domain: string; fit_score: number } | null;
+}
+
+interface ContactIntelligenceRow {
+  id: string;
+  segment_key: string | null;
+  buyer_persona_angle: string | null;
+  contact_rationale: string | null;
+  intelligence_confidence: number | null;
+  needs_review: boolean | null;
+  contacts: { id: string; first_name: string; last_name: string; title: string; email: string } | null;
+  companies: { id: string; name: string; domain: string } | null;
+}
+
+interface SegmentSummary {
+  segment_key: string;
+  company_count: number;
+  needs_review_count: number;
 }
 
 interface MessageVariant {
@@ -48,6 +86,7 @@ interface MessageVariant {
   subject_line: string | null;
   body: string | null;
   framework_used: string | null;
+  segment_key: string | null;
   created_at: string;
 }
 
@@ -82,6 +121,50 @@ interface Artifact {
   created_at: string;
 }
 
+// ─── Intelligence UI types ────────────────────────────────────────────────────
+
+interface IntelligenceSummaryStats {
+  totalCompanies: number;
+  totalContacts: number;
+  activeSegments: number;
+  avgConfidence: number;
+  needsReviewCount: number;
+  fallbackCount: number;
+  highConfidenceCount: number;
+  lowConfidenceCount: number;
+}
+
+interface RichSegmentSummary extends SegmentSummary {
+  contact_count: number;
+  avg_confidence: number;
+  fallback_count: number;
+  variant_count: number;
+  apollo_sequence_id: string | null;
+  contacts_routed: number;
+  dominant_titles: string[];
+}
+
+interface RoutingStat {
+  segment_key: string;
+  apollo_sequence_id: string | null;
+  total_contacts: number;
+  sent: number;
+  pending: number;
+  failed: number;
+}
+
+interface Skill5ParsedSummary {
+  companiesClassified: number;
+  contactsProcessed: number;
+  activeSegments: number;
+  variantsGenerated: number;
+  sequencesCreated: number;
+  contactsEnrolled: number;
+  needsReviewCount: number;
+  highConfidenceCount: number;
+  lowConfidenceCount: number;
+}
+
 // ─── Skill name map ───────────────────────────────────────────────────────────
 
 const SKILL_NAMES: Record<number, string> = {
@@ -92,6 +175,135 @@ const SKILL_NAMES: Record<number, string> = {
   5: 'Launch Outreach',
   6: 'Campaign Review',
 };
+
+// ─── Segment helpers ──────────────────────────────────────────────────────────
+
+const OFFER_LABELS: Record<string, string> = {
+  individual_placement: 'Individual',
+  pod_delivery: 'Pod',
+};
+
+const SERVICE_LABELS: Record<string, string> = {
+  data_engineering: 'Data Eng',
+  ml_ai: 'ML/AI',
+  cloud_infrastructure: 'Cloud',
+  software_development: 'Software',
+  cyber_security: 'Cyber',
+};
+
+const SEGMENT_COLORS: Record<string, string> = {
+  data_engineering: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+  ml_ai: 'bg-violet-500/10 text-violet-400 border-violet-500/20',
+  cloud_infrastructure: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
+  software_development: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+  cyber_security: 'bg-red-500/10 text-red-400 border-red-500/20',
+};
+
+function SegmentBadge({ segmentKey }: { segmentKey: string | null | undefined }) {
+  if (!segmentKey) return <span className="text-neutral-600 text-xs">—</span>;
+  const [offer, service] = segmentKey.split(':');
+  const offerLabel = OFFER_LABELS[offer] ?? offer;
+  const serviceLabel = SERVICE_LABELS[service] ?? service;
+  const colors = SEGMENT_COLORS[service] ?? 'bg-neutral-800 text-neutral-400 border-neutral-700';
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full border ${colors}`}>
+      {offerLabel} · {serviceLabel}
+    </span>
+  );
+}
+
+function formatSegmentLabel(segmentKey: string): string {
+  const [offer, service] = segmentKey.split(':');
+  return `${OFFER_LABELS[offer] ?? offer} × ${SERVICE_LABELS[service] ?? service}`;
+}
+
+function ConfidenceBadge({ confidence }: { confidence: number | null | undefined }) {
+  if (confidence == null) return <span className="text-neutral-600 text-xs">—</span>;
+  const pct = Math.round(confidence * 100);
+  const color = confidence >= 0.8 ? 'text-emerald-400' : confidence >= 0.65 ? 'text-yellow-400' : 'text-red-400';
+  return <span className={`text-xs font-mono font-semibold ${color}`}>{pct}%</span>;
+}
+
+// ─── Accent color per segment (for left borders) ────────────────────────────
+
+function getSegmentAccentColor(segmentKey: string): string {
+  const sl = segmentKey.split(':')[1] || '';
+  const colors: Record<string, string> = {
+    data_engineering: 'border-l-cyan-500',
+    ml_ai: 'border-l-violet-500',
+    cloud_infrastructure: 'border-l-orange-500',
+    software_development: 'border-l-emerald-500',
+    cyber_security: 'border-l-red-500',
+  };
+  return colors[sl] || 'border-l-neutral-500';
+}
+
+// ─── Parse Skill 5 log output into structured summary ────────────────────────
+
+function parseSkill5Summary(logLines: string[]): Skill5ParsedSummary | null {
+  if (!logLines?.length) return null;
+  const text = logLines.join('\n');
+  const num = (pattern: RegExp) => {
+    const m = text.match(pattern);
+    return m ? parseInt(m[1], 10) : 0;
+  };
+  return {
+    companiesClassified: num(/Company Classifications:\s*(\d+)/),
+    contactsProcessed: num(/contacts? (?:created|processed):\s*(\d+)/i),
+    activeSegments: num(/Active Segments:\s*(\d+)/),
+    variantsGenerated: num(/Saved (\d+) message variants/),
+    sequencesCreated: num(/Created (\d+) sequence/i) || num(/Active Segments:\s*(\d+)/),
+    contactsEnrolled: num(/Contacts? enrolled:\s*(\d+)/i),
+    needsReviewCount: num(/needs review.*?:\s*(\d+)/i),
+    highConfidenceCount: num(/High confidence.*?:\s*(\d+)/i),
+    lowConfidenceCount: num(/Low.*?needs review.*?:\s*(\d+)/i),
+  };
+}
+
+// ─── VariantCard ──────────────────────────────────────────────────────────────
+
+function VariantCard({ variant: v, index: idx }: { variant: MessageVariant; index: number }) {
+  return (
+    <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800 bg-neutral-800/30">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-white">Variant {idx + 1}</span>
+          {v.variant_name && (
+            <span className="text-xs text-neutral-500">— {v.variant_name}</span>
+          )}
+        </div>
+        {v.framework_used && (
+          <span className="text-xs text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-full">
+            {v.framework_used}
+          </span>
+        )}
+      </div>
+      {v.subject_line && (
+        <div className="px-4 py-2.5 border-b border-neutral-800/60">
+          <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-0.5">Subject</div>
+          <div className="text-sm text-white font-semibold leading-snug">{v.subject_line}</div>
+        </div>
+      )}
+      <div className="px-4 py-3">
+        <pre className="text-xs text-neutral-300 whitespace-pre-wrap font-sans leading-relaxed">
+          {v.body}
+        </pre>
+      </div>
+      <div className="px-4 pb-3 flex justify-end">
+        <button
+          onClick={() =>
+            navigator.clipboard.writeText(
+              v.subject_line ? `Subject: ${v.subject_line}\n\n${v.body}` : (v.body ?? ''),
+            )
+          }
+          className="text-xs text-neutral-500 hover:text-neutral-300 flex items-center gap-1 transition-colors"
+        >
+          <Copy className="h-3 w-3" /> Copy
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ─── CopyButton ───────────────────────────────────────────────────────────────
 
@@ -189,12 +401,13 @@ function useCampaignSkillRunner(offerSlug: string, campaignSlug: string) {
 
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 
-type Tab = 'pipeline' | 'leads' | 'copy' | 'results';
+type Tab = 'pipeline' | 'leads' | 'copy' | 'intelligence' | 'results';
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'pipeline', label: 'Pipeline', icon: <Play className="h-3.5 w-3.5" /> },
   { id: 'leads', label: 'Leads', icon: <Users className="h-3.5 w-3.5" /> },
   { id: 'copy', label: 'Copy', icon: <Mail className="h-3.5 w-3.5" /> },
+  { id: 'intelligence', label: 'Intelligence', icon: <Brain className="h-3.5 w-3.5" /> },
   { id: 'results', label: 'Results', icon: <BarChart2 className="h-3.5 w-3.5" /> },
 ];
 
@@ -356,8 +569,74 @@ export default function CampaignDashboardPage() {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [artifactsLoading, setArtifactsLoading] = useState(false);
 
+  // Intelligence tab
+  const [intelligenceRows, setIntelligenceRows] = useState<IntelligenceRow[]>([]);
+  const [contactIntelligence, setContactIntelligence] = useState<ContactIntelligenceRow[]>([]);
+  const [segmentSummaries, setSegmentSummaries] = useState<SegmentSummary[]>([]);
+  const [intelligenceLoading, setIntelligenceLoading] = useState(false);
+
+  // Intelligence UI state
+  const [expandedContactId, setExpandedContactId] = useState<string | null>(null);
+  const [routingStats, setRoutingStats] = useState<RoutingStat[]>([]);
+
+  // Segment filter for Leads tab
+  const [segmentFilter, setSegmentFilter] = useState<string | null>(null);
+
   const { logs, isRunning, exitCode, runningSkill, runSkill, logEndRef } =
     useCampaignSkillRunner(offerSlug, campaignSlug);
+
+  // ── Intelligence computed values ─────────────────────────────────────────────
+
+  const intelligenceSummary = useMemo<IntelligenceSummaryStats | null>(() => {
+    if (!intelligenceRows.length) return null;
+    const confs = intelligenceRows.map(r => r.confidence ?? 0);
+    return {
+      totalCompanies: intelligenceRows.length,
+      totalContacts: contactIntelligence.length,
+      activeSegments: segmentSummaries.length,
+      avgConfidence: confs.reduce((a, b) => a + b, 0) / confs.length,
+      needsReviewCount: intelligenceRows.filter(r => r.needs_review).length,
+      fallbackCount: intelligenceRows.filter(r => r.fallback_applied).length,
+      highConfidenceCount: confs.filter(c => c >= 0.80).length,
+      lowConfidenceCount: confs.filter(c => c < 0.65).length,
+    };
+  }, [intelligenceRows, contactIntelligence, segmentSummaries]);
+
+  const richSegments = useMemo<RichSegmentSummary[]>(() => {
+    return segmentSummaries.map(seg => {
+      const segContacts = contactIntelligence.filter(c => c.segment_key === seg.segment_key);
+      const segIntel = intelligenceRows.filter(r => r.segment_key === seg.segment_key);
+      const segVariants = variants.filter(v => v.segment_key === seg.segment_key);
+      const confs = segIntel.map(r => r.confidence ?? 0);
+      const routing = routingStats.find(rs => rs.segment_key === seg.segment_key);
+      const titleCounts: Record<string, number> = {};
+      segContacts.forEach(c => {
+        const t = c.contacts?.title || 'Unknown';
+        titleCounts[t] = (titleCounts[t] || 0) + 1;
+      });
+      const dominantTitles = Object.entries(titleCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([t]) => t);
+      return {
+        ...seg,
+        contact_count: segContacts.length,
+        avg_confidence: confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : 0,
+        fallback_count: segIntel.filter(r => r.fallback_applied).length,
+        variant_count: segVariants.length,
+        apollo_sequence_id: routing?.apollo_sequence_id ?? null,
+        contacts_routed: routing?.total_contacts ?? 0,
+        dominant_titles: dominantTitles,
+      };
+    });
+  }, [segmentSummaries, contactIntelligence, intelligenceRows, variants, routingStats]);
+
+  const latestSkill5Summary = useMemo<Skill5ParsedSummary | null>(() => {
+    if (!skillRuns?.length) return null;
+    const skill5Run = skillRuns.find(r => r.skill_number === 5);
+    if (!skill5Run?.log_lines) return null;
+    return parseSkill5Summary(skill5Run.log_lines);
+  }, [skillRuns]);
 
   // ── Resolve campaign ID + name from slugs ──────────────────────────────────
   const [campaignId, setCampaignId] = useState<string | null>(null);
@@ -444,6 +723,10 @@ export default function CampaignDashboardPage() {
       .select(`
         id,
         outreach_status,
+        segment_key,
+        buyer_persona_angle,
+        needs_review,
+        intelligence_confidence,
         contacts (
           id, first_name, last_name, title, email, linkedin_url, fit_score,
           companies ( name, domain, fit_score )
@@ -455,6 +738,10 @@ export default function CampaignDashboardPage() {
         data: Array<{
           id: string;
           outreach_status: string;
+          segment_key: string | null;
+          buyer_persona_angle: string | null;
+          needs_review: boolean | null;
+          intelligence_confidence: number | null;
           contacts: {
             id: string;
             first_name: string;
@@ -477,6 +764,10 @@ export default function CampaignDashboardPage() {
           fit_score: row.contacts?.fit_score ?? 0,
           outreach_status: row.outreach_status,
           companies: row.contacts?.companies ?? null,
+          segment_key: row.segment_key,
+          buyer_persona_angle: row.buyer_persona_angle,
+          needs_review: row.needs_review,
+          intelligence_confidence: row.intelligence_confidence,
         }));
         setLeads(mapped);
         setLeadsLoading(false);
@@ -485,12 +776,12 @@ export default function CampaignDashboardPage() {
 
   // ── Fetch message variants ──────────────────────────────────────────────────
   useEffect(() => {
-    if (activeTab !== 'copy' || !campaignId) return;
+    if (!campaignId) return;
     setVariantsLoading(true);
     const supabase = createClient();
     supabase
       .from('message_variants')
-      .select('id, channel, variant_name, subject_line, body, framework_used, created_at')
+      .select('id, channel, variant_name, subject_line, body, framework_used, segment_key, created_at')
       .eq('campaign_id', campaignId)
       .order('channel')
       .order('created_at')
@@ -498,7 +789,7 @@ export default function CampaignDashboardPage() {
         setVariants(data ?? []);
         setVariantsLoading(false);
       });
-  }, [activeTab, campaignId]);
+  }, [campaignId]);
 
   // ── Fetch campaign metrics ──────────────────────────────────────────────────
   useEffect(() => {
@@ -534,6 +825,81 @@ export default function CampaignDashboardPage() {
         setArtifactsLoading(false);
       });
   }, [campaignId]);
+
+  // ── Fetch intelligence data ────────────────────────────────────────────────
+  useEffect(() => {
+    if (activeTab !== 'intelligence' || !campaignId) return;
+    setIntelligenceLoading(true);
+
+    const supabase = createClient();
+
+    // Fetch company-level intelligence
+    supabase
+      .from('outreach_intelligence')
+      .select(`
+        id, company_id, offer_type, service_line, segment_key,
+        messaging_angle, rationale, confidence, needs_review, fallback_applied,
+        companies ( id, name, domain, fit_score )
+      `)
+      .eq('campaign_id', campaignId)
+      .order('confidence', { ascending: true })
+      .then(({ data }: { data: IntelligenceRow[] | null }) => {
+        setIntelligenceRows(data ?? []);
+
+        // Build segment summaries
+        const segMap = new Map<string, { count: number; needsReview: number }>();
+        for (const row of (data ?? [])) {
+          const entry = segMap.get(row.segment_key) || { count: 0, needsReview: 0 };
+          entry.count++;
+          if (row.needs_review) entry.needsReview++;
+          segMap.set(row.segment_key, entry);
+        }
+        setSegmentSummaries(
+          Array.from(segMap.entries()).map(([key, stats]) => ({
+            segment_key: key,
+            company_count: stats.count,
+            needs_review_count: stats.needsReview,
+          })),
+        );
+      });
+
+    // Fetch contact-level intelligence
+    supabase
+      .from('campaign_contacts')
+      .select(`
+        id, segment_key, buyer_persona_angle, contact_rationale,
+        intelligence_confidence, needs_review,
+        contacts ( id, first_name, last_name, title, email ),
+        companies ( id, name, domain )
+      `)
+      .eq('campaign_id', campaignId)
+      .not('segment_key', 'is', null)
+      .order('intelligence_confidence', { ascending: true })
+      .then(({ data }: { data: ContactIntelligenceRow[] | null }) => {
+        setContactIntelligence(data ?? []);
+        setIntelligenceLoading(false);
+      });
+
+    // Fetch routing stats from messages table
+    supabase
+      .from('messages')
+      .select('segment_key, apollo_sequence_id, send_status')
+      .eq('campaign_id', campaignId)
+      .then(({ data: msgData }: { data: { segment_key: string; apollo_sequence_id: string; send_status: string }[] | null }) => {
+        if (msgData?.length) {
+          const grouped: Record<string, RoutingStat> = {};
+          msgData.forEach((m) => {
+            const key = m.segment_key || 'unassigned';
+            if (!grouped[key]) grouped[key] = { segment_key: key, apollo_sequence_id: m.apollo_sequence_id, total_contacts: 0, sent: 0, pending: 0, failed: 0 };
+            grouped[key].total_contacts++;
+            if (m.send_status === 'sent') grouped[key].sent++;
+            else if (m.send_status === 'failed') grouped[key].failed++;
+            else grouped[key].pending++;
+          });
+          setRoutingStats(Object.values(grouped));
+        }
+      });
+  }, [activeTab, campaignId]);
 
   // Refresh artifacts when a skill finishes
   useEffect(() => {
@@ -728,6 +1094,40 @@ export default function CampaignDashboardPage() {
               )}
             </div>
 
+            {/* Segment filter */}
+            {leads.length > 0 && leads.some((l) => l.segment_key) && (
+              <div className="flex items-center gap-2 mb-4">
+                <Filter className="h-3.5 w-3.5 text-neutral-500" />
+                <select
+                  value={segmentFilter ?? ''}
+                  onChange={(e) => setSegmentFilter(e.target.value || null)}
+                  className="bg-neutral-800 border border-neutral-700 text-neutral-300 text-xs rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                >
+                  <option value="">All Segments</option>
+                  {[...new Set(leads.map((l) => l.segment_key).filter(Boolean) as string[])].map(
+                    (sk) => (
+                      <option key={sk} value={sk}>
+                        {formatSegmentLabel(sk)}
+                      </option>
+                    ),
+                  )}
+                </select>
+                {segmentFilter && (
+                  <button
+                    onClick={() => setSegmentFilter(null)}
+                    className="text-xs text-neutral-500 hover:text-neutral-300 transition-colors"
+                  >
+                    Clear
+                  </button>
+                )}
+                <span className="text-xs text-neutral-600 ml-auto">
+                  {segmentFilter
+                    ? `${leads.filter((l) => l.segment_key === segmentFilter).length} of ${leads.length}`
+                    : `${leads.length} total`}
+                </span>
+              </div>
+            )}
+
             {leadsLoading ? (
               <div className="flex flex-col items-center justify-center py-20 gap-3 text-neutral-500">
                 <Loader2 className="h-5 w-5 animate-spin" />
@@ -746,7 +1146,7 @@ export default function CampaignDashboardPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-neutral-800/50">
                     <tr>
-                      {['Name', 'Title', 'Company', 'Email', 'ICP Score', 'Status'].map((h) => (
+                      {['Name', 'Title', 'Company', 'Segment', 'Email', 'ICP', 'Status'].map((h) => (
                         <th
                           key={h}
                           className="text-left text-xs font-medium text-gray-400 px-4 py-3"
@@ -757,11 +1157,20 @@ export default function CampaignDashboardPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-800">
-                    {leads.map((lead) => (
+                    {leads
+                      .filter((l) => !segmentFilter || l.segment_key === segmentFilter)
+                      .map((lead) => (
                       <tr key={lead.id} className="hover:bg-neutral-800/30 transition-colors group">
                         <td className="px-4 py-3">
-                          <div className="text-white font-medium text-sm">
-                            {lead.first_name} {lead.last_name}
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-white font-medium text-sm">
+                              {lead.first_name} {lead.last_name}
+                            </span>
+                            {lead.needs_review && (
+                              <span title="Needs review">
+                                <AlertTriangle className="h-3 w-3 text-yellow-500 flex-shrink-0" />
+                              </span>
+                            )}
                           </div>
                           {lead.linkedin_url && (
                             <a
@@ -774,8 +1183,13 @@ export default function CampaignDashboardPage() {
                             </a>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-gray-400 text-xs max-w-[160px] truncate">
-                          {lead.title || '—'}
+                        <td className="px-4 py-3 max-w-[180px]">
+                          <div className="text-gray-400 text-xs truncate">{lead.title || '—'}</div>
+                          {lead.buyer_persona_angle && (
+                            <div className="text-indigo-400 text-[11px] font-medium mt-0.5 truncate" title={lead.buyer_persona_angle}>
+                              {lead.buyer_persona_angle}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           {lead.companies ? (
@@ -785,6 +1199,14 @@ export default function CampaignDashboardPage() {
                             </div>
                           ) : (
                             <span className="text-neutral-600">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <SegmentBadge segmentKey={lead.segment_key} />
+                          {lead.intelligence_confidence != null && (
+                            <div className="mt-1">
+                              <ConfidenceBadge confidence={lead.intelligence_confidence} />
+                            </div>
                           )}
                         </td>
                         <td className="px-4 py-3">
@@ -862,70 +1284,455 @@ export default function CampaignDashboardPage() {
               </div>
             ) : (
               <div className="space-y-6">
-                {/* Group by channel */}
-                {(['email', 'linkedin'] as const).map((channel) => {
-                  const channelVariants = variants.filter((v) => v.channel === channel);
-                  if (channelVariants.length === 0) return null;
-                  return (
-                    <div key={channel}>
-                      <h3 className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-3">
-                        {channel === 'email' ? '📧 Email Variants' : '💼 LinkedIn Variants'}
-                      </h3>
-                      <div className="space-y-3">
-                        {channelVariants.map((v, idx) => (
-                          <div
-                            key={v.id}
-                            className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden"
-                          >
-                            <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800 bg-neutral-800/30">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-semibold text-white">
-                                  Variant {idx + 1}
-                                </span>
-                                {v.variant_name && (
-                                  <span className="text-xs text-neutral-500">— {v.variant_name}</span>
+                {(() => {
+                  // Check if any variants have segment_key
+                  const hasSegments = variants.some((v) => v.segment_key);
+                  if (!hasSegments) {
+                    // Legacy: group by channel only
+                    return (['email', 'linkedin'] as const).map((channel) => {
+                      const channelVariants = variants.filter((v) => v.channel === channel);
+                      if (channelVariants.length === 0) return null;
+                      return (
+                        <div key={channel}>
+                          <h3 className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-3">
+                            {channel === 'email' ? '📧 Email Variants' : '💼 LinkedIn Variants'}
+                          </h3>
+                          <div className="space-y-3">
+                            {channelVariants.map((v, idx) => (
+                              <VariantCard key={v.id} variant={v} index={idx} />
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    });
+                  }
+
+                  // Segment-grouped: group by segment_key then channel within each
+                  const segmentKeys = [...new Set(variants.map((v) => v.segment_key).filter(Boolean) as string[])];
+                  return segmentKeys.map((sk) => {
+                    const segVariants = variants.filter((v) => v.segment_key === sk);
+                    return (
+                      <div key={sk} className="border border-neutral-800 rounded-xl overflow-hidden">
+                        {/* Segment header */}
+                        <div className={`px-4 py-3 bg-neutral-800/40 border-b border-neutral-800 border-l-2 ${getSegmentAccentColor(sk)} flex items-center justify-between`}>
+                          <div className="flex items-center gap-3">
+                            <SegmentBadge segmentKey={sk} />
+                            <span className="text-xs text-neutral-500">
+                              {segVariants.length} variant{segVariants.length !== 1 ? 's' : ''}
+                            </span>
+                          </div>
+                          {(() => {
+                            const rich = richSegments.find(rs => rs.segment_key === sk);
+                            return rich ? (
+                              <div className="flex items-center gap-3 text-[10px] text-neutral-500">
+                                <span>{rich.company_count} companies</span>
+                                <span className="text-neutral-700">·</span>
+                                <span>{rich.contact_count} contacts</span>
+                                {rich.avg_confidence > 0 && (
+                                  <>
+                                    <span className="text-neutral-700">·</span>
+                                    <span>avg conf: {(rich.avg_confidence * 100).toFixed(0)}%</span>
+                                  </>
                                 )}
                               </div>
-                              {v.framework_used && (
-                                <span className="text-xs text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-full">
-                                  {v.framework_used}
-                                </span>
-                              )}
-                            </div>
-                            {v.subject_line && (
-                              <div className="px-4 py-2 border-b border-neutral-800/60">
-                                <span className="text-xs text-neutral-500">Subject: </span>
-                                <span className="text-xs text-white font-medium">{v.subject_line}</span>
+                            ) : null;
+                          })()}
+                        </div>
+                        <div className="p-4 space-y-4">
+                          {(['email', 'linkedin'] as const).map((channel) => {
+                            const channelVariants = segVariants.filter((v) => v.channel === channel);
+                            if (channelVariants.length === 0) return null;
+                            return (
+                              <div key={channel}>
+                                <h4 className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-2">
+                                  {channel === 'email' ? '📧 Email' : '💼 LinkedIn'}
+                                </h4>
+                                <div className="space-y-3">
+                                  {channelVariants.map((v, idx) => (
+                                    <VariantCard key={v.id} variant={v} index={idx} />
+                                  ))}
+                                </div>
                               </div>
-                            )}
-                            <div className="px-4 py-3">
-                              <pre className="text-xs text-neutral-300 whitespace-pre-wrap font-sans leading-relaxed">
-                                {v.body}
-                              </pre>
-                            </div>
-                            <div className="px-4 pb-3 flex justify-end">
-                              <button
-                                onClick={() =>
-                                  navigator.clipboard.writeText(
-                                    v.subject_line ? `Subject: ${v.subject_line}\n\n${v.body}` : (v.body ?? ''),
-                                  )
-                                }
-                                className="text-xs text-neutral-500 hover:text-neutral-300 flex items-center gap-1 transition-colors"
-                              >
-                                <Copy className="h-3 w-3" /> Copy
-                              </button>
-                            </div>
-                          </div>
-                        ))}
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  });
+                })()}
               </div>
             )}
 
             {/* Copy-related artifacts (Skill 3 files) */}
             <ArtifactDownloads artifacts={artifacts} loading={artifactsLoading} skillFilter={[3]} />
+          </div>
+        )}
+
+        {/* ── Intelligence tab ──────────────────────────────────────────────── */}
+        {activeTab === 'intelligence' && (
+          <div className="max-w-5xl mx-auto">
+            <div className="mb-6">
+              <h2 className="text-base font-semibold text-white mb-1">Outreach Intelligence</h2>
+              <p className="text-gray-500 text-xs">
+                AI-generated company and contact classifications from Skill 5.
+              </p>
+            </div>
+
+            {intelligenceLoading ? (
+              <div className="flex flex-col items-center justify-center py-20 gap-3 text-neutral-500">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                <span className="text-sm">Loading intelligence data…</span>
+              </div>
+            ) : intelligenceRows.length === 0 ? (
+              <div className="border border-dashed border-neutral-700 rounded-xl p-12 text-center">
+                <Brain className="h-8 w-8 text-gray-600 mx-auto mb-3" />
+                <p className="text-gray-400 text-sm mb-1">No intelligence data yet</p>
+                <p className="text-gray-500 text-xs max-w-md mx-auto">
+                  Run Skill 5 with intelligence enabled to classify companies and contacts.
+                  Intelligence classifies each company into offer × service line segments and adapts
+                  buyer messaging per contact.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-8">
+
+                {/* ── 9a: Intelligence Summary Bar ─────────────────────────── */}
+                {intelligenceSummary && (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                    {[
+                      { label: 'Companies', value: intelligenceSummary.totalCompanies, color: 'text-indigo-400' },
+                      { label: 'Contacts', value: intelligenceSummary.totalContacts, color: 'text-violet-400' },
+                      { label: 'Segments', value: intelligenceSummary.activeSegments, color: 'text-blue-400' },
+                      { label: 'Avg Confidence', value: `${(intelligenceSummary.avgConfidence * 100).toFixed(0)}%`, color: intelligenceSummary.avgConfidence >= 0.80 ? 'text-emerald-400' : intelligenceSummary.avgConfidence >= 0.65 ? 'text-yellow-400' : 'text-red-400' },
+                      { label: 'Needs Review', value: intelligenceSummary.needsReviewCount, color: intelligenceSummary.needsReviewCount > 0 ? 'text-yellow-400' : 'text-neutral-500' },
+                      { label: 'Fallback', value: intelligenceSummary.fallbackCount, color: intelligenceSummary.fallbackCount > 0 ? 'text-orange-400' : 'text-neutral-500' },
+                    ].map(({ label, value, color }) => (
+                      <div key={label} className="bg-neutral-900 border border-neutral-800 rounded-lg p-3 text-center">
+                        <div className={`text-lg font-bold ${color}`}>{value}</div>
+                        <div className="text-[10px] text-neutral-500 uppercase tracking-wider mt-0.5">{label}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* ── 9b: Needs Review Banner ─────────────────────────────── */}
+                {intelligenceSummary && intelligenceSummary.needsReviewCount > 0 && (
+                  <div className="flex items-center gap-3 px-4 py-3 bg-yellow-500/5 border border-yellow-500/20 rounded-lg">
+                    <AlertTriangle className="h-4 w-4 text-yellow-400 flex-shrink-0" />
+                    <span className="text-xs text-yellow-300">
+                      {intelligenceSummary.needsReviewCount} classification{intelligenceSummary.needsReviewCount !== 1 ? 's' : ''} flagged for review — low confidence or fallback applied.
+                      {intelligenceSummary.lowConfidenceCount > 0 && (
+                        <span className="text-yellow-400/60"> ({intelligenceSummary.lowConfidenceCount} below 65% confidence)</span>
+                      )}
+                    </span>
+                  </div>
+                )}
+
+                {/* ── 9c: Skill 5 Run Outcome Panel ───────────────────────── */}
+                {latestSkill5Summary && (
+                  <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-neutral-800 bg-neutral-800/30">
+                      <h3 className="text-xs font-semibold text-white uppercase tracking-wider">Latest Skill 5 Run</h3>
+                    </div>
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-px bg-neutral-800">
+                      {[
+                        { label: 'Classified', value: latestSkill5Summary.companiesClassified },
+                        { label: 'Contacts', value: latestSkill5Summary.contactsProcessed },
+                        { label: 'Segments', value: latestSkill5Summary.activeSegments },
+                        { label: 'Variants', value: latestSkill5Summary.variantsGenerated },
+                        { label: 'Sequences', value: latestSkill5Summary.sequencesCreated },
+                        { label: 'Enrolled', value: latestSkill5Summary.contactsEnrolled },
+                      ].map(({ label, value }) => (
+                        <div key={label} className="bg-neutral-900 px-3 py-3 text-center">
+                          <div className="text-sm font-bold text-white">{value}</div>
+                          <div className="text-[10px] text-neutral-500 mt-0.5">{label}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── 9d: Rich Segment Cards ───────────────────────────────── */}
+                {richSegments.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-3 mb-4">
+                      <h3 className="text-sm font-semibold text-white uppercase tracking-wider">Segments</h3>
+                      <div className="flex-1 h-px bg-neutral-800" />
+                      <span className="text-xs text-neutral-500">{richSegments.length} active</span>
+                    </div>
+                    <div className="space-y-3">
+                      {richSegments.map((seg) => (
+                        <div
+                          key={seg.segment_key}
+                          className={`bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden border-l-2 ${getSegmentAccentColor(seg.segment_key)}`}
+                        >
+                          {/* Header */}
+                          <div className="px-4 py-3 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <SegmentBadge segmentKey={seg.segment_key} />
+                              <span className="text-[10px] text-neutral-500">
+                                {OFFER_LABELS[seg.segment_key.split(':')[0]] ?? seg.segment_key.split(':')[0]} ×{' '}
+                                {SERVICE_LABELS[seg.segment_key.split(':')[1]] ?? seg.segment_key.split(':')[1]}
+                              </span>
+                            </div>
+                            {seg.needs_review_count > 0 && (
+                              <span className="text-xs bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                <AlertTriangle className="h-3 w-3" /> {seg.needs_review_count} review
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Stats row */}
+                          <div className="px-4 pb-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+                            <span className="text-xs text-neutral-400">
+                              <span className="font-semibold text-white">{seg.company_count}</span> companies
+                            </span>
+                            <span className="text-xs text-neutral-400">
+                              <span className="font-semibold text-white">{seg.contact_count}</span> contacts
+                            </span>
+                            <span className="text-xs text-neutral-400">
+                              <span className="font-semibold text-white">{seg.variant_count}</span> variants
+                            </span>
+                            {seg.avg_confidence > 0 && (
+                              <span className="text-xs text-neutral-400">
+                                avg conf:{' '}
+                                <span className={`font-semibold ${seg.avg_confidence >= 0.80 ? 'text-emerald-400' : seg.avg_confidence >= 0.65 ? 'text-yellow-400' : 'text-red-400'}`}>
+                                  {(seg.avg_confidence * 100).toFixed(0)}%
+                                </span>
+                              </span>
+                            )}
+                            {seg.fallback_count > 0 && (
+                              <span className="text-xs text-orange-400/70">
+                                {seg.fallback_count} fallback
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Apollo routing row */}
+                          {seg.apollo_sequence_id && (
+                            <div className="px-4 pb-2 flex items-center gap-3 text-[10px] text-neutral-500">
+                              <span>Sequence: <span className="text-neutral-400 font-mono">{seg.apollo_sequence_id.slice(0, 12)}…</span></span>
+                              <span className="text-neutral-700">·</span>
+                              <span>{seg.contacts_routed} routed</span>
+                              {(() => {
+                                const routing = routingStats.find(rs => rs.segment_key === seg.segment_key);
+                                return routing ? (
+                                  <>
+                                    {routing.sent > 0 && <span className="text-emerald-500">{routing.sent} sent</span>}
+                                    {routing.pending > 0 && <span className="text-neutral-400">{routing.pending} pending</span>}
+                                    {routing.failed > 0 && <span className="text-red-400">{routing.failed} failed</span>}
+                                  </>
+                                ) : null;
+                              })()}
+                            </div>
+                          )}
+
+                          {/* Dominant titles */}
+                          {seg.dominant_titles.length > 0 && (
+                            <div className="px-4 pb-3 flex items-center gap-1.5">
+                              <span className="text-[10px] text-neutral-600">Top titles:</span>
+                              {seg.dominant_titles.map((t) => (
+                                <span key={t} className="text-[10px] bg-neutral-800 text-neutral-400 px-1.5 py-0.5 rounded">
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── 9f: Company Classifications Table ────────────────────── */}
+                <div>
+                  <div className="flex items-center gap-3 mb-4">
+                    <h3 className="text-sm font-semibold text-white uppercase tracking-wider">Company Classifications</h3>
+                    <div className="flex-1 h-px bg-neutral-800" />
+                    <span className="text-xs text-neutral-500">{intelligenceRows.length} companies</span>
+                  </div>
+                  <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left">
+                        <thead>
+                          <tr className="border-b border-neutral-800 bg-neutral-800/30">
+                            {['Company', 'Segment', 'Messaging Angle', 'Confidence', 'Status'].map(
+                              (h) => (
+                                <th
+                                  key={h}
+                                  className="px-4 py-3 text-xs font-medium text-neutral-500 uppercase tracking-wider"
+                                >
+                                  {h}
+                                </th>
+                              ),
+                            )}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-neutral-800">
+                          {intelligenceRows.map((row) => (
+                            <tr key={row.id} className={`hover:bg-neutral-800/30 transition-colors border-l-2 ${getSegmentAccentColor(row.segment_key)}`}>
+                              <td className="px-4 py-3">
+                                <div className="text-xs font-medium text-white">
+                                  {row.companies?.name ?? '—'}
+                                </div>
+                                <div className="text-xs text-neutral-500">
+                                  {row.companies?.domain ?? '—'}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <SegmentBadge segmentKey={row.segment_key} />
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="text-xs text-neutral-300 max-w-xs truncate" title={row.messaging_angle ?? undefined}>
+                                  {row.messaging_angle ?? '—'}
+                                </div>
+                                {row.rationale && (
+                                  <div className="text-xs text-neutral-600 max-w-xs truncate mt-0.5" title={row.rationale}>
+                                    {row.rationale}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="px-4 py-3">
+                                <ConfidenceBadge confidence={row.confidence} />
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2">
+                                  {row.needs_review && (
+                                    <span className="text-xs bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                      <AlertTriangle className="h-3 w-3" /> Review
+                                    </span>
+                                  )}
+                                  {row.fallback_applied && (
+                                    <span className="text-xs bg-neutral-800 text-neutral-400 px-2 py-0.5 rounded-full">
+                                      Fallback
+                                    </span>
+                                  )}
+                                  {!row.needs_review && !row.fallback_applied && (
+                                    <span className="text-xs text-emerald-400">
+                                      <CheckCircle2 className="h-3.5 w-3.5" />
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── 9g: Contact Buyer Adaptations (expandable rows) ─────── */}
+                {contactIntelligence.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-3 mb-4">
+                      <h3 className="text-sm font-semibold text-white uppercase tracking-wider">Contact Buyer Adaptations</h3>
+                      <div className="flex-1 h-px bg-neutral-800" />
+                      <span className="text-xs text-neutral-500">{contactIntelligence.length} contacts</span>
+                    </div>
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left">
+                          <thead>
+                            <tr className="border-b border-neutral-800 bg-neutral-800/30">
+                              {['', 'Contact', 'Title', 'Segment', 'Buyer Angle', 'Confidence'].map(
+                                (h) => (
+                                  <th
+                                    key={h || 'expand'}
+                                    className={`px-4 py-3 text-xs font-medium text-neutral-500 uppercase tracking-wider ${h === '' ? 'w-8' : ''}`}
+                                  >
+                                    {h}
+                                  </th>
+                                ),
+                              )}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-neutral-800">
+                            {contactIntelligence.map((ci) => {
+                              const isExpanded = expandedContactId === ci.id;
+                              return (
+                                <React.Fragment key={ci.id}>
+                                  <tr
+                                    className="hover:bg-neutral-800/30 transition-colors cursor-pointer"
+                                    onClick={() => setExpandedContactId(isExpanded ? null : ci.id)}
+                                  >
+                                    <td className="px-4 py-3 text-neutral-500">
+                                      {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="text-xs font-medium text-white">
+                                          {ci.contacts?.first_name} {ci.contacts?.last_name}
+                                        </span>
+                                        {ci.needs_review && (
+                                          <AlertTriangle className="h-3 w-3 text-yellow-400" />
+                                        )}
+                                      </div>
+                                      <div className="text-[10px] text-neutral-500">{ci.companies?.name ?? ''}</div>
+                                    </td>
+                                    <td className="px-4 py-3 text-xs text-neutral-300">
+                                      {ci.contacts?.title ?? '—'}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <SegmentBadge segmentKey={ci.segment_key} />
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <div className="text-xs text-indigo-400 font-medium max-w-xs truncate" title={ci.buyer_persona_angle ?? undefined}>
+                                        {ci.buyer_persona_angle ?? '—'}
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <ConfidenceBadge confidence={ci.intelligence_confidence} />
+                                    </td>
+                                  </tr>
+                                  {isExpanded && (
+                                    <tr className="bg-neutral-800/20">
+                                      <td colSpan={6} className="px-8 py-4">
+                                        <div className="space-y-3">
+                                          {ci.buyer_persona_angle && (
+                                            <div>
+                                              <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">Buyer Persona Angle</div>
+                                              <div className="text-xs text-indigo-400 font-medium leading-relaxed">{ci.buyer_persona_angle}</div>
+                                            </div>
+                                          )}
+                                          {ci.contact_rationale && (
+                                            <div>
+                                              <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">Contact Rationale</div>
+                                              <div className="text-xs text-neutral-300 leading-relaxed">{ci.contact_rationale}</div>
+                                            </div>
+                                          )}
+                                          {ci.needs_review && (
+                                            <div className="flex items-center gap-2 mt-2">
+                                              <AlertTriangle className="h-3.5 w-3.5 text-yellow-400" />
+                                              <span className="text-xs text-yellow-300">Flagged for review — verify classification before outreach</span>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  )}
+                                </React.Fragment>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── 9h: Intelligence but no contacts state ───────────────── */}
+                {contactIntelligence.length === 0 && intelligenceRows.length > 0 && (
+                  <div className="border border-dashed border-neutral-700 rounded-xl p-8 text-center">
+                    <Users className="h-6 w-6 text-neutral-600 mx-auto mb-2" />
+                    <p className="text-neutral-400 text-sm mb-1">Company classifications loaded</p>
+                    <p className="text-neutral-500 text-xs">
+                      Contact-level buyer adaptations will appear after contacts are processed through intelligence.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
