@@ -350,34 +350,53 @@ async function reconstructLeadsCSV(supabase: any, campaignSlug: string, campaign
 
   if (!campaign?.id) return;
 
-  // Join campaign_contacts → contacts → companies via foreign keys
-  const { data: rows } = await supabase
-    .from('campaign_contacts')
-    .select(`
-      contacts (
-        first_name, last_name, title, email, linkedin_url,
-        companies ( name, domain, fit_score )
-      ),
-      campaign_companies ( signal_details, fit_score )
-    `)
+  // Skill 4 stores companies in campaign_companies and contacts in contacts
+  // (linked via company_id). The campaign_contacts table may be empty, so we
+  // join through campaign_companies → companies → contacts instead.
+  const { data: ccRows } = await supabase
+    .from('campaign_companies')
+    .select('company_id, signal_details, fit_score')
     .eq('campaign_id', campaign.id);
 
-  if (!rows?.length) return;
+  if (!ccRows?.length) return;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const companyIds = ccRows.map((r: any) => r.company_id).filter(Boolean);
+  if (!companyIds.length) return;
+
+  // Fetch companies
+  const { data: companies } = await supabase
+    .from('companies')
+    .select('id, name, domain, fit_score')
+    .in('id', companyIds);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const companyMap: Map<string, any> = new Map((companies ?? []).map((c: any) => [c.id, c]));
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const signalMap: Map<string, any> = new Map(ccRows.map((r: any) => [r.company_id, r]));
+
+  // Fetch contacts belonging to these companies
+  const { data: contacts } = await supabase
+    .from('contacts')
+    .select('first_name, last_name, title, email, linkedin_url, company_id')
+    .in('company_id', companyIds);
+
+  if (!contacts?.length) return;
 
   const q = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const header = 'company_name,company_domain,hiring_signal,job_url,posted_at,fit_score,first_name,last_name,title,email,linkedin_url';
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const lines = rows.map((r: any) => {
-    const c = r.contacts;
-    const co = Array.isArray(c?.companies) ? c.companies[0] : c?.companies;
-    const sig = Array.isArray(r.campaign_companies) ? r.campaign_companies[0] : r.campaign_companies;
+  const lines = contacts.map((c: any) => {
+    const co = companyMap.get(c.company_id);
+    const sig = signalMap.get(c.company_id);
     return [
       co?.name ?? '', co?.domain ?? '',
       sig?.signal_details ?? '', '', '',
       co?.fit_score ?? sig?.fit_score ?? '',
-      c?.first_name ?? '', c?.last_name ?? '',
-      c?.title ?? '', c?.email ?? '', c?.linkedin_url ?? '',
+      c.first_name ?? '', c.last_name ?? '',
+      c.title ?? '', c.email ?? '', c.linkedin_url ?? '',
     ].map(q).join(',');
   });
 
