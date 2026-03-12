@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     campaignId = campaignRows?.[0]?.id ?? null;
   }
 
-  // Skill 3: message_variants exist for this campaign
+  // Skill 3: message_variants exist for this campaign, or skill_runs shows success
   let skill3 = false;
   if (campaignId) {
     const { data: variantRows } = await sb
@@ -49,6 +49,16 @@ export async function GET(request: NextRequest) {
       .eq('campaign_id', campaignId)
       .limit(1);
     skill3 = (variantRows?.length ?? 0) > 0;
+    if (!skill3) {
+      const { data: skill3Runs } = await sb
+        .from('skill_runs')
+        .select('id')
+        .eq('campaign_id', campaignId)
+        .eq('skill_number', 3)
+        .eq('status', 'success')
+        .limit(1);
+      skill3 = (skill3Runs?.length ?? 0) > 0;
+    }
   }
 
   // Skills 4-6: check file system for outputs
@@ -64,9 +74,23 @@ export async function GET(request: NextRequest) {
     }
   };
 
-  const skill4 = campaign ? exists(offer, 'campaigns', campaign, 'leads', 'all_leads.csv') : false;
+  // Skills 4-6: check file system first, then fall back to skill_runs table.
+  // On Vercel, /tmp is ephemeral — files may not persist across function invocations,
+  // so the DB fallback ensures status is correctly detected after successful runs.
+
+  let skill4 = campaign ? exists(offer, 'campaigns', campaign, 'leads', 'all_leads.csv') : false;
+  if (!skill4 && campaignId) {
+    const { data: skill4Runs } = await sb
+      .from('skill_runs')
+      .select('id')
+      .eq('campaign_id', campaignId)
+      .eq('skill_number', 4)
+      .eq('status', 'success')
+      .limit(1);
+    skill4 = (skill4Runs?.length ?? 0) > 0;
+  }
+
   // Skill 5 may write messages.csv OR enroll directly in Apollo sequences.
-  // Check both file system and skill_runs table for completion.
   let skill5 = campaign ? exists(offer, 'campaigns', campaign, 'outreach', 'messages.csv') : false;
   if (!skill5 && campaignId) {
     const { data: skill5Runs } = await sb
@@ -78,7 +102,18 @@ export async function GET(request: NextRequest) {
       .limit(1);
     skill5 = (skill5Runs?.length ?? 0) > 0;
   }
-  const skill6 = campaign ? exists(offer, 'campaigns', campaign, 'results', 'learnings.md') : false;
+
+  let skill6 = campaign ? exists(offer, 'campaigns', campaign, 'results', 'learnings.md') : false;
+  if (!skill6 && campaignId) {
+    const { data: skill6Runs } = await sb
+      .from('skill_runs')
+      .select('id')
+      .eq('campaign_id', campaignId)
+      .eq('skill_number', 6)
+      .eq('status', 'success')
+      .limit(1);
+    skill6 = (skill6Runs?.length ?? 0) > 0;
+  }
 
   return NextResponse.json({ skill1, skill2, skill3, skill4, skill5, skill6 });
 }
