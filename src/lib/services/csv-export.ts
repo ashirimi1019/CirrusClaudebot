@@ -6,6 +6,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { deduplicateContactsByEmail } from './deduplication.ts';
 
 /**
  * Convert an array of objects to CSV string.
@@ -81,11 +82,18 @@ export function buildLeadRows(
     linkedin_url: string | null;
   }>
 ): LeadRow[] {
+  // Deduplicate before building rows
+  const dedupedContacts = deduplicateContactsByEmail(contacts);
+  const skippedDupes = contacts.length - dedupedContacts.length;
+  if (skippedDupes > 0) {
+    console.warn(`  ⚠️ buildLeadRows: removed ${skippedDupes} duplicate contacts by email`);
+  }
+
   let skippedNoEmail = 0;
   let missingName = 0;
 
   const rows: LeadRow[] = [];
-  for (const c of contacts) {
+  for (const c of dedupedContacts) {
     if (!c.email || c.email.trim() === '') {
       skippedNoEmail++;
       continue;

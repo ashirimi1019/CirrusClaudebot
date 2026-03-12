@@ -31,6 +31,7 @@ import readline from 'readline';
 import {
   listSequences,
   createSequence,
+  searchSequenceByName,
   addEmailStepToSequence,
   bulkCreateContacts,
   addContactsToSequence,
@@ -126,6 +127,192 @@ function createReadlineInterface(): readline.Interface {
 
 async function prompt(rl: readline.Interface, question: string): Promise<string> {
   return new Promise((resolve) => rl.question(question, (a) => resolve(a.trim())));
+}
+
+// ─── Deterministic Sequence Naming ──────────────────────────────────────────
+
+/**
+ * Build a deterministic Apollo sequence name for a campaign + segment.
+ * This ensures reruns produce the same name, enabling dedup by name search.
+ *
+ * Format: "CirrusLabs - {campaignSlug} - {segmentKey}"
+ * Static mode: "CirrusLabs - {campaignSlug}"
+ */
+function buildSequenceName(campaignSlug: string, segmentKey?: string): string {
+  if (segmentKey) {
+    return `CirrusLabs - ${campaignSlug} - ${segmentKey}`;
+  }
+  return `CirrusLabs - ${campaignSlug}`;
+}
+
+/**
+ * Resolve an existing Apollo sequence or create a new one.
+ * 3-tier lookup:
+ *   1. Check campaign_sequences DB table for this campaign + segment
+ *   2. Search Apollo by exact name match
+ *   3. Create new sequence in Apollo
+ *
+ * After resolve/create, upserts a row into campaign_sequences for future lookups.
+ * Returns the ApolloSequence (existing or new) and whether it was reused.
+ */
+async function resolveOrCreateSequence(
+  campaignSlug: string,
+  segmentKey: string | null,
+  campaignId: string | null,
+): Promise<{ sequence: ApolloSequence; reused: boolean }> {
+  const sb = getSupabaseClient();
+  const seqName = buildSequenceName(campaignSlug, segmentKey || undefined);
+
+  // ── Tier 1: Check campaign_sequences DB ──
+  if (campaignId) {
+    const coalesced = segmentKey || '__static__';
+    const { data: existing } = await sb
+      .from('campaign_sequences')
+      .select('apollo_sequence_id, sequence_name, steps_count, contacts_enrolled')
+      .eq('campaign_id', campaignId)
+      .eq('segment_key', segmentKey)  // Will match NULL = NULL only if both are null
+      .limit(1)
+      .maybeSingle();
+
+    // Handle NULL segment_key case explicitly
+    let dbRow = existing;
+    if (!dbRow && !segmentKey) {
+      const { data: staticRow } = await sb
+        .from('campaign_sequences')
+        .select('apollo_sequence_id, sequence_name, steps_count, contacts_enrolled')
+        .eq('campaign_id', campaignId)
+        .is('segment_key', null)
+        .limit(1)
+        .maybeSingle();
+      dbRow = staticRow;
+    }
+
+    if (dbRow?.apollo_sequence_id) {
+      // Verify the sequence still exists in Apollo
+      try {
+        const details = await getSequenceDetails(dbRow.apollo_sequence_id);
+        if (details) {
+          console.log(`  ♻️  Reusing existing sequence from DB: "${dbRow.sequence_name}" (ID: ${dbRow.apollo_sequence_id})`);
+          return {
+            sequence: {
+              id: dbRow.apollo_sequence_id,
+              name: dbRow.sequence_name,
+              active: true,
+              num_steps: details.steps?.length || dbRow.steps_count || 0,
+              num_contacts: dbRow.contacts_enrolled || 0,
+              created_at: '',
+            },
+            reused: true,
+          };
+        }
+      } catch {
+        console.warn(`  ⚠️ Sequence ${dbRow.apollo_sequence_id} in DB but not found in Apollo — will search/create`);
+      }
+    }
+  }
+
+  // ── Tier 2: Search Apollo by exact name ──
+  const found = await searchSequenceByName(seqName);
+  if (found) {
+    console.log(`  ♻️  Found existing Apollo sequence by name: "${found.name}" (ID: ${found.id})`);
+
+    // Save to DB for future lookups
+    if (campaignId) {
+      await upsertCampaignSequence(campaignId, segmentKey, found.id, found.name, found.num_steps, found.num_contacts);
+    }
+
+    return { sequence: found, reused: true };
+  }
+
+  // ── Tier 3: Create new sequence ──
+  const newSeq = await createSequence(seqName);
+  console.log(`  ✅ Created new sequence: "${seqName}" (ID: ${newSeq.id})`);
+
+  // Save to DB
+  if (campaignId) {
+    await upsertCampaignSequence(campaignId, segmentKey, newSeq.id, newSeq.name, 0, 0);
+  }
+
+  return { sequence: newSeq, reused: false };
+}
+
+/**
+ * Upsert a row in campaign_sequences to track Apollo sequence ownership.
+ */
+async function upsertCampaignSequence(
+  campaignId: string,
+  segmentKey: string | null,
+  apolloSequenceId: string,
+  sequenceName: string,
+  stepsCount: number,
+  contactsEnrolled: number,
+): Promise<void> {
+  const sb = getSupabaseClient();
+
+  try {
+    // Use raw SQL for the upsert since COALESCE-based unique index is tricky with PostgREST
+    const { error } = await sb.rpc('upsert_campaign_sequence', {
+      p_campaign_id: campaignId,
+      p_segment_key: segmentKey,
+      p_apollo_sequence_id: apolloSequenceId,
+      p_sequence_name: sequenceName,
+      p_steps_count: stepsCount,
+      p_contacts_enrolled: contactsEnrolled,
+    });
+
+    if (error) {
+      // Fallback: try direct insert/update
+      const { error: insertErr } = await sb.from('campaign_sequences').upsert(
+        {
+          campaign_id: campaignId,
+          segment_key: segmentKey,
+          apollo_sequence_id: apolloSequenceId,
+          sequence_name: sequenceName,
+          steps_count: stepsCount,
+          contacts_enrolled: contactsEnrolled,
+          status: 'active',
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'apollo_sequence_id' },
+      );
+      if (insertErr) {
+        console.warn(`  ⚠️ Failed to save campaign_sequence: ${insertErr.message}`);
+      }
+    }
+  } catch (err: any) {
+    // Non-fatal — sequence was still created/found in Apollo
+    console.warn(`  ⚠️ campaign_sequences save failed (non-fatal): ${err.message}`);
+  }
+}
+
+/**
+ * Update the contacts_enrolled count for a campaign sequence.
+ */
+async function updateSequenceEnrollmentCount(
+  apolloSequenceId: string,
+  additionalContacts: number,
+): Promise<void> {
+  const sb = getSupabaseClient();
+  try {
+    // Get current count, then update
+    const { data: row } = await sb
+      .from('campaign_sequences')
+      .select('contacts_enrolled')
+      .eq('apollo_sequence_id', apolloSequenceId)
+      .limit(1)
+      .maybeSingle();
+
+    const current = row?.contacts_enrolled || 0;
+    await sb
+      .from('campaign_sequences')
+      .update({
+        contacts_enrolled: current + additionalContacts,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('apollo_sequence_id', apolloSequenceId);
+  } catch {
+    // Non-fatal
+  }
 }
 
 // ─── Variant file parsing (for static fallback) ─────────────────────────────
@@ -355,7 +542,9 @@ export async function runSkill5LaunchOutreach(
     tracker.startStep('Save intelligence to DB');
     try {
       await saveIntelligenceToDB(processedClassifications, contacts, campaignSlug, offerSlug);
-      tracker.completeStep('Save intelligence to DB', `${processedClassifications.length} company classifications + ${contacts.length} contact records saved`);
+      // Populate campaign_contacts bridge table (enables Intelligence API contact queries)
+      const campaignContactsInserted = await populateCampaignContacts(segments, campaignSlug);
+      tracker.completeStep('Save intelligence to DB', `${processedClassifications.length} company classifications + ${contacts.length} contact records + ${campaignContactsInserted} campaign_contacts saved`);
     } catch (err: any) {
       tracker.partialStep('Save intelligence to DB', `DB save failed (non-fatal): ${err.message}`);
     }
@@ -369,45 +558,91 @@ export async function runSkill5LaunchOutreach(
       tracker.partialStep('Save variants & artifacts', `DB save failed (non-fatal): ${err.message}`);
     }
 
-    // ─── Step 11: Create Apollo sequences per segment + add email steps ───
+    // ─── Step 11: Resolve/Create Apollo sequences per segment (dedup-safe) ───
     tracker.startStep('Create Apollo sequences');
+
+    // Resolve campaignId for DB-based sequence tracking
+    let campaignId: string | null = null;
+    try {
+      const sb = getSupabaseClient();
+      const { data: cRow } = await sb
+        .from('campaigns')
+        .select('id')
+        .eq('slug', campaignSlug)
+        .limit(1)
+        .maybeSingle();
+      campaignId = cRow?.id || null;
+    } catch { /* best-effort — resolveOrCreateSequence works without campaignId */ }
+
     let sequencesCreated = 0;
+    let sequencesReused = 0;
     let sequenceFailed = 0;
 
     for (const segment of segments) {
-      const segLabel = `${OFFER_TYPE_LABELS[segment.offer_type]} - ${SERVICE_LINE_LABELS[segment.service_line]}`;
-      const seqName = `CirrusLabs - ${campaignSlug} - ${segment.segment_key}`;
-
       try {
-        const sequence = await createSequence(seqName);
+        const { sequence, reused } = await resolveOrCreateSequence(
+          campaignSlug,
+          segment.segment_key,
+          campaignId,
+        );
         segment.apollo_sequence_id = sequence.id;
-        sequencesCreated++;
-        console.log(`  ✅ Created sequence: "${seqName}" (ID: ${sequence.id})`);
+        if (reused) {
+          sequencesReused++;
+        } else {
+          sequencesCreated++;
+        }
       } catch (err: any) {
         sequenceFailed++;
-        console.error(`  ❌ Failed to create sequence "${seqName}": ${err.message}`);
+        console.error(`  ❌ Failed to resolve/create sequence for "${segment.segment_key}": ${err.message}`);
       }
     }
 
+    const totalResolved = sequencesCreated + sequencesReused;
     if (sequenceFailed === 0) {
-      tracker.completeStep('Create Apollo sequences', `${sequencesCreated} sequences created`, sequencesCreated);
-    } else if (sequencesCreated > 0) {
-      tracker.partialStep('Create Apollo sequences', `${sequencesCreated} created, ${sequenceFailed} failed`, sequencesCreated);
+      const parts: string[] = [];
+      if (sequencesCreated > 0) parts.push(`${sequencesCreated} created`);
+      if (sequencesReused > 0) parts.push(`${sequencesReused} reused`);
+      tracker.completeStep('Create Apollo sequences', parts.join(', ') || '0 sequences', totalResolved);
+    } else if (totalResolved > 0) {
+      tracker.partialStep('Create Apollo sequences', `${totalResolved} resolved (${sequencesCreated} new, ${sequencesReused} reused), ${sequenceFailed} failed`, totalResolved);
     } else {
-      tracker.failStep('Create Apollo sequences', `All ${sequenceFailed} sequence creations failed`);
+      tracker.failStep('Create Apollo sequences', `All ${sequenceFailed} sequence resolutions failed`);
       tracker.printSummary();
       if (rl) rl.close();
-      throw new Error('Skill 5: Failed to create any Apollo sequences');
+      throw new Error('Skill 5: Failed to resolve or create any Apollo sequences');
     }
 
-    // ─── Add email steps to each sequence ───
+    // ─── Add email steps to each sequence (skip for reused sequences with existing steps) ───
     tracker.startStep('Add email steps');
     const dayOffsets = [0, 3, 7];
     let totalStepsAdded = 0;
     let totalStepsFailed = 0;
+    let totalStepsSkipped = 0;
 
     for (const segment of segments) {
       if (!segment.apollo_sequence_id || !segment.variants) continue;
+
+      // Check if this reused sequence already has steps — skip adding if so
+      try {
+        const seqDetails = await getSequenceDetails(segment.apollo_sequence_id);
+        if (seqDetails.steps?.length > 0) {
+          console.log(`  ♻️  ${segment.segment_key}: Sequence already has ${seqDetails.steps.length} steps — skipping`);
+          totalStepsSkipped += seqDetails.steps.length;
+
+          // Update steps_count in campaign_sequences for accuracy
+          if (campaignId) {
+            try {
+              const sb = getSupabaseClient();
+              await sb.from('campaign_sequences')
+                .update({ steps_count: seqDetails.steps.length, updated_at: new Date().toISOString() })
+                .eq('apollo_sequence_id', segment.apollo_sequence_id);
+            } catch { /* non-fatal */ }
+          }
+          continue;
+        }
+      } catch {
+        // Can't check details — proceed to add steps
+      }
 
       for (let i = 0; i < segment.variants.length; i++) {
         const variant = segment.variants[i];
@@ -426,12 +661,27 @@ export async function runSkill5LaunchOutreach(
           console.error(`  ❌ ${segment.segment_key} Step ${i + 1} failed: ${err.message}`);
         }
       }
+
+      // Update steps_count in campaign_sequences
+      if (campaignId) {
+        try {
+          const sb = getSupabaseClient();
+          await sb.from('campaign_sequences')
+            .update({ steps_count: segment.variants.length, updated_at: new Date().toISOString() })
+            .eq('apollo_sequence_id', segment.apollo_sequence_id);
+        } catch { /* non-fatal */ }
+      }
     }
 
+    const stepParts: string[] = [];
+    if (totalStepsAdded > 0) stepParts.push(`${totalStepsAdded} added`);
+    if (totalStepsSkipped > 0) stepParts.push(`${totalStepsSkipped} existing (skipped)`);
+    if (totalStepsFailed > 0) stepParts.push(`${totalStepsFailed} failed`);
+
     if (totalStepsFailed === 0) {
-      tracker.completeStep('Add email steps', `${totalStepsAdded} steps added across ${sequencesCreated} sequences`, totalStepsAdded);
+      tracker.completeStep('Add email steps', stepParts.join(', ') || 'No steps to add', totalStepsAdded);
     } else {
-      tracker.partialStep('Add email steps', `${totalStepsAdded} added, ${totalStepsFailed} failed`, totalStepsAdded);
+      tracker.partialStep('Add email steps', stepParts.join(', '), totalStepsAdded);
     }
 
     // ─── Step 12: Bulk create contacts + enroll per segment ───
@@ -458,6 +708,20 @@ export async function runSkill5LaunchOutreach(
         segmentContactIds.set(segment.segment_key, ids);
         totalCreated += ids.length;
         console.log(`  ✅ ${segment.segment_key}: ${ids.length} contacts created`);
+
+        // Sync Apollo contact IDs back to Supabase contacts table
+        const sb = getSupabaseClient();
+        for (let i = 0; i < created.length && i < segment.contacts.length; i++) {
+          const apolloId = created[i].id;
+          const email = segment.contacts[i].email;
+          if (apolloId && email) {
+            try {
+              await sb.from('contacts')
+                .update({ apollo_contact_id: apolloId, updated_at: new Date().toISOString() })
+                .eq('email', email.toLowerCase().trim());
+            } catch { /* best-effort sync — don't fail the step */ }
+          }
+        }
       } catch (err: any) {
         totalCreateFailed += segment.contacts.length;
         console.error(`  ❌ ${segment.segment_key}: bulkCreateContacts failed: ${err.message}`);
@@ -504,6 +768,9 @@ export async function runSkill5LaunchOutreach(
           await addContactsToSequence(contactIds, segment.apollo_sequence_id, emailAccountId);
           totalEnrolled += contactIds.length;
           console.log(`  ✅ ${segment.segment_key}: ${contactIds.length} enrolled in sequence`);
+
+          // Update enrollment count in campaign_sequences
+          await updateSequenceEnrollmentCount(segment.apollo_sequence_id, contactIds.length);
         } catch (err: any) {
           enrollmentFailed += contactIds.length;
           console.error(`  ❌ ${segment.segment_key}: enrollment failed: ${err.message}`);
@@ -550,16 +817,32 @@ async function runStaticOutreach(
   rl?: readline.Interface | null
 ): Promise<string | void> {
 
-  // ─── Select/create sequence ───
+  // ─── Select/create sequence (dedup-safe) ───
   tracker.startStep('Create Apollo sequences');
-  const existingSequences = await listSequences();
   let sequence: ApolloSequence;
-  const defaultSequenceName = `CirrusLabs - ${campaignSlug}`;
+  let staticSequenceReused = false;
+  const defaultSequenceName = buildSequenceName(campaignSlug);
+
+  // Resolve campaignId for DB-based tracking
+  let staticCampaignId: string | null = null;
+  try {
+    const sb = getSupabaseClient();
+    const { data: cRow } = await sb
+      .from('campaigns')
+      .select('id')
+      .eq('slug', campaignSlug)
+      .limit(1)
+      .maybeSingle();
+    staticCampaignId = cRow?.id || null;
+  } catch { /* best-effort */ }
 
   if (config?.apolloSequenceId) {
+    // Explicit sequence ID provided — use it directly
+    const existingSequences = await listSequences();
     const found = existingSequences.find((s) => s.id === config.apolloSequenceId);
     if (found) {
       sequence = found;
+      staticSequenceReused = true;
       console.log(`✅ Using configured sequence: "${sequence.name}"`);
     } else {
       tracker.failStep('Create Apollo sequences', `Sequence ID "${config.apolloSequenceId}" not found`);
@@ -568,41 +851,51 @@ async function runStaticOutreach(
       throw new Error(`Sequence ID "${config.apolloSequenceId}" not found in Apollo`);
     }
   } else if (autoMode) {
-    const existing = existingSequences.find((s) =>
-      s.name.toLowerCase().includes(campaignSlug.toLowerCase())
-    );
-    if (existing) {
-      sequence = existing;
-      console.log(`✅ Auto-selected existing sequence: "${sequence.name}"`);
+    // Auto mode — use 3-tier dedup-safe resolution
+    const result = await resolveOrCreateSequence(campaignSlug, null, staticCampaignId);
+    sequence = result.sequence;
+    staticSequenceReused = result.reused;
+  } else if (rl) {
+    // Interactive mode — offer existing sequences or create new
+    const existingSequences = await listSequences();
+    if (existingSequences.length > 0) {
+      console.log('\nExisting sequences:');
+      existingSequences.forEach((s, i) => {
+        console.log(`  [${i + 1}] ${s.name} (${s.num_contacts} contacts, ${s.num_steps} steps)`);
+      });
+      console.log(`  [N] Create new sequence`);
+      const choice = await prompt(rl, '\nSelect sequence number or N for new: ');
+      if (choice.toLowerCase() === 'n') {
+        const name = await prompt(rl, `New sequence name (default: "${defaultSequenceName}"): `);
+        sequence = await createSequence(name || defaultSequenceName);
+      } else {
+        const idx = parseInt(choice) - 1;
+        if (idx < 0 || idx >= existingSequences.length) {
+          tracker.failStep('Create Apollo sequences', `Invalid selection: "${choice}"`);
+          tracker.printSummary();
+          if (rl) rl.close();
+          throw new Error('Invalid sequence selection');
+        }
+        sequence = existingSequences[idx];
+        staticSequenceReused = true;
+      }
     } else {
       sequence = await createSequence(defaultSequenceName);
-      console.log(`✅ Auto-created sequence: "${sequence.name}" (ID: ${sequence.id})`);
-    }
-  } else if (rl && existingSequences.length > 0) {
-    console.log('\nExisting sequences:');
-    existingSequences.forEach((s, i) => {
-      console.log(`  [${i + 1}] ${s.name} (${s.num_contacts} contacts, ${s.num_steps} steps)`);
-    });
-    console.log(`  [N] Create new sequence`);
-    const choice = await prompt(rl, '\nSelect sequence number or N for new: ');
-    if (choice.toLowerCase() === 'n') {
-      const name = await prompt(rl, `New sequence name (default: "${defaultSequenceName}"): `);
-      sequence = await createSequence(name || defaultSequenceName);
-    } else {
-      const idx = parseInt(choice) - 1;
-      if (idx < 0 || idx >= existingSequences.length) {
-        tracker.failStep('Create Apollo sequences', `Invalid selection: "${choice}"`);
-        tracker.printSummary();
-        if (rl) rl.close();
-        throw new Error('Invalid sequence selection');
-      }
-      sequence = existingSequences[idx];
     }
   } else {
-    sequence = await createSequence(defaultSequenceName);
-    console.log(`✅ Created sequence: "${sequence.name}" (ID: ${sequence.id})`);
+    // No interactive, no autoMode — use 3-tier resolution as fallback
+    const result = await resolveOrCreateSequence(campaignSlug, null, staticCampaignId);
+    sequence = result.sequence;
+    staticSequenceReused = result.reused;
   }
-  tracker.completeStep('Create Apollo sequences', `"${sequence.name}" (ID: ${sequence.id})`);
+
+  // Save to campaign_sequences for future lookups
+  if (staticCampaignId) {
+    await upsertCampaignSequence(staticCampaignId, null, sequence.id, sequence.name, sequence.num_steps, sequence.num_contacts);
+  }
+
+  const seqLabel = staticSequenceReused ? 'reused' : 'created';
+  tracker.completeStep('Create Apollo sequences', `"${sequence.name}" (ID: ${sequence.id}) [${seqLabel}]`);
 
   // ─── Add email steps ───
   tracker.startStep('Add email steps');
@@ -694,6 +987,9 @@ async function runStaticOutreach(
         const active = emailAccounts.find((a) => a.active) || emailAccounts[0];
         await addContactsToSequence(contactIds, sequence.id, active.id);
         tracker.completeStep('Enroll in sequences', `${contactIds.length} enrolled, sending from ${active.email}`, contactIds.length);
+
+        // Update enrollment count in campaign_sequences
+        await updateSequenceEnrollmentCount(sequence.id, contactIds.length);
       }
     } catch (err: any) {
       tracker.partialStep('Enroll in sequences', `Enrollment failed: ${err.message}`);
@@ -804,6 +1100,69 @@ async function saveIntelligenceToDB(
   console.log(`  → Saved ${classifications.length} company classifications + ${contactSaveCount} campaign_company intelligence rows to DB`);
 }
 
+/**
+ * Populate campaign_contacts bridge table with contact-level intelligence data.
+ * This enables the Intelligence API route to return contact-level data and
+ * connects contacts to campaigns for tracking and dedup.
+ */
+async function populateCampaignContacts(
+  segments: SegmentGroup[],
+  campaignSlug: string,
+): Promise<number> {
+  const sb = getSupabaseClient();
+
+  const { data: campaignRow } = await sb
+    .from('campaigns')
+    .select('id')
+    .eq('slug', campaignSlug)
+    .limit(1)
+    .single();
+
+  const campaignId = campaignRow?.id;
+  if (!campaignId) {
+    console.warn('  ⚠️ populateCampaignContacts: campaign not found');
+    return 0;
+  }
+
+  let inserted = 0;
+  for (const segment of segments) {
+    for (const contact of segment.contacts) {
+      if (!contact.email) continue;
+
+      // Look up the contact's DB id by email
+      const { data: contactRow } = await sb
+        .from('contacts')
+        .select('id')
+        .eq('email', contact.email.toLowerCase().trim())
+        .limit(1)
+        .maybeSingle();
+
+      if (!contactRow?.id) continue;
+
+      const { error } = await sb
+        .from('campaign_contacts')
+        .upsert(
+          {
+            campaign_id: campaignId,
+            contact_id: contactRow.id,
+            segment_key: (contact as any).segment_key || segment.segment_key || null,
+            buyer_persona_angle: (contact as any).buyer_persona_angle || null,
+            contact_rationale: (contact as any).contact_rationale || null,
+            intelligence_confidence: (contact as any).intelligence_confidence || null,
+            needs_review: (contact as any).needs_review || false,
+            outreach_status: 'pending',
+          },
+          { onConflict: 'campaign_id,contact_id' },
+        );
+
+      if (!error) inserted++;
+    }
+  }
+
+  console.log(`  → Populated ${inserted} campaign_contacts rows`);
+  return inserted;
+}
+
 async function saveVariantsAndArtifacts(
   segments: SegmentGroup[],
   campaignSlug: string,
@@ -827,14 +1186,17 @@ async function saveVariantsAndArtifacts(
     if (!segment.variants) continue;
 
     for (const variant of segment.variants) {
-      await sb.from('message_variants').insert({
-        campaign_id: campaignId,
-        channel: 'email',
-        variant_name: `${segment.segment_key} - Variant ${variant.variant_number}`,
-        subject_line: variant.subject,
-        body: variant.body,
-        segment_key: segment.segment_key,
-      });
+      await sb.from('message_variants').upsert(
+        {
+          campaign_id: campaignId,
+          channel: 'email',
+          variant_name: `${segment.segment_key} - Variant ${variant.variant_number}`,
+          subject_line: variant.subject,
+          body: variant.body,
+          segment_key: segment.segment_key,
+        },
+        { onConflict: 'campaign_id,variant_name' },
+      );
     }
   }
 

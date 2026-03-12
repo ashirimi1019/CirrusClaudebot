@@ -343,6 +343,42 @@ export async function listSequences(): Promise<ApolloSequence[]> {
 }
 
 /**
+ * Search for an existing Apollo sequence by exact name match.
+ * Returns the first matching sequence or null.
+ */
+export async function searchSequenceByName(name: string): Promise<ApolloSequence | null> {
+  if (!name) return null;
+  const client = apolloClient();
+
+  try {
+    const response = await withRetry(
+      () => client.post('/emailer_campaigns/search', {
+        q_name: name,
+        per_page: '10',
+      }),
+      { label: 'apollo_search_sequence_by_name', maxAttempts: 2 }
+    );
+
+    const sequences = response.data.emailer_campaigns || [];
+    // Apollo's q_name does partial matching — we need exact match
+    const exact = sequences.find((c: any) => c.name === name);
+    if (exact) {
+      return {
+        id: exact.id,
+        name: exact.name,
+        active: exact.active !== false,
+        num_steps: exact.num_steps || exact.emailer_steps_count || 0,
+        num_contacts: exact.num_contacts || exact.contacts_count || 0,
+        created_at: exact.created_at,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Create a new email sequence in Apollo.
  */
 export async function createSequence(name: string): Promise<ApolloSequence> {
