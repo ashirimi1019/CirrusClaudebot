@@ -505,3 +505,26 @@ That's the agentic advantage.
 **Improvement:** Measurable in 3-5 campaigns
 
 Let's go.
+
+---
+
+## Frontend Architecture Notes
+
+### Data Layer Split
+- CLI skills write outputs to **filesystem** (`offers/{slug}/...`) — DB records may or may not exist
+- Dashboard list pages query **Supabase directly** from browser (`NEXT_PUBLIC_SUPABASE_ANON_KEY`)
+- Campaign detail Pipeline tab uses **server-side** `/api/skills/status` (checks filesystem, not DB)
+- Campaign detail other tabs (Leads, Copy, Intelligence, Results) use **browser-side Supabase** — require DB records
+- If offers/campaigns list is empty but direct URLs work, the DB is empty — NOT a frontend bug
+
+### Key Frontend Files
+- `frontend/src/lib/supabase.ts` — Browser client (singleton, anon key)
+- `frontend/src/lib/useSkillRunner.ts` — Shared SSE skill runner hook
+- `frontend/src/app/dashboard/offers/[offerSlug]/campaigns/[campaignSlug]/page.tsx` — Campaign detail (~1800 lines), has local `useCampaignSkillRunner` hook — changes to shared hook must be mirrored here
+- RLS is **disabled** (commented out in migration) — anon key can read all tables
+
+### Frontend Validation & Testing
+- `cd frontend && npx tsc --noEmit` — TypeScript check (run before committing)
+- PostgREST `.single()` returns HTTP 406 when 0 rows match — caught silently by try/catch
+- Google Sheets references were replaced with XLSX Export (settings, landing page, integrations)
+- Empty DB states are handled gracefully on all pages — verify with network tab, not just UI
