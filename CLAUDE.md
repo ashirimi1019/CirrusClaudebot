@@ -528,3 +528,46 @@ Let's go.
 - PostgREST `.single()` returns HTTP 406 when 0 rows match — caught silently by try/catch
 - Google Sheets references were replaced with XLSX Export (settings, landing page, integrations)
 - Empty DB states are handled gracefully on all pages — verify with network tab, not just UI
+
+---
+
+## Recent Changes (March 11-12, 2026)
+
+### Production-Readiness Hardening
+- All 6 skills: added input validation, error recovery, graceful degradation
+- `tool_usage` column names corrected + Supabase error handling added
+- Apollo API deprecations resolved + end-to-end skill testing completed
+- Apollo 422 enrollment error fixed + Skill 5 status check updated
+- Apollo blank templates fixed — two-phase step creation + template repair
+
+### Dashboard UI/UX
+- Mobile sidebar CSS override breaking desktop layout — fixed
+- Comprehensive UI/UX polish pass across all dashboard pages
+- Stale `campaign_metrics` field names corrected in dashboard pages
+- Full operator workflow: `skill_runs` tracking, live data views, XLSX export
+- Broken avatar fixed + account history system built
+- Env vars exposure + hardcoded account data removed from settings
+- Status API path resolution fixed for local development
+- Operator guide added (`OPERATOR_GUIDE.md`)
+
+### Frontend Validation Pass (12 bugs fixed, 12 files)
+- **Security:** Path traversal blocked on artifact download route (`api/artifacts/[id]/route.ts`)
+- **SSE exitCode bug:** Fixed in both `useSkillRunner.ts` and local `useCampaignSkillRunner` — `setExitCode(1)` added to error/onerror handlers
+- **Double-encoding:** Removed extra `decodeURIComponent` in `useSkillRunner.ts`
+- **Slug race conditions:** Fixed in new offer + new campaign forms — slug recalculated at submit time
+- **CSV exports:** Wired up Export CSV buttons on Companies + Contacts pages
+- **Stale branding:** Google Sheets → XLSX Export across landing page, settings, integrations
+- **Dead link:** Positioning artifact link fixed on offer detail page
+- **Env fallbacks:** Added `NEXT_PUBLIC_*` fallbacks in `vercel-paths.ts` for Vercel deployments
+
+### Skill 5 Intelligence UI/UX Polish
+- Intelligence summary bar with color-coded confidence stats
+- Needs-review amber banner for flagged classifications
+- Skill 5 run outcome panel (parsed from `log_lines`)
+- Rich segment cards with accent colors, routing stats, dominant titles
+- Styled section dividers replacing bare `<h3>` tags
+- Company table accent borders per segment
+- Expandable contact rows with full rationale on click
+- Copy tab segment context headers with company/contact counts
+- VariantCard subject line upgraded (larger, bolder)
+- Leads tab buyer persona visibility bumped (full opacity, 11px, medium weight)
