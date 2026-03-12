@@ -75,6 +75,7 @@ export function useSkillRunner(
           es.close();
         } else if (data.type === 'error') {
           setLogs((prev) => [...prev, `❌ Error: ${data.message}`]);
+          setExitCode(1);
           setIsRunning(false);
           es.close();
         }
@@ -85,6 +86,7 @@ export function useSkillRunner(
 
     es.onerror = () => {
       setLogs((prev) => [...prev, '❌ Connection lost']);
+      setExitCode(1);
       setIsRunning(false);
       es.close();
     };

@@ -377,6 +377,7 @@ function useCampaignSkillRunner(offerSlug: string, campaignSlug: string) {
             es.close();
           } else if (data.type === 'error') {
             setLogs((prev) => [...prev, `❌ Error: ${data.message}`]);
+            setExitCode(1);
             setIsRunning(false);
             setRunningSkill(null);
             es.close();
@@ -388,6 +389,7 @@ function useCampaignSkillRunner(offerSlug: string, campaignSlug: string) {
 
       es.onerror = () => {
         setLogs((prev) => [...prev, '❌ Connection lost']);
+        setExitCode(1);
         setIsRunning(false);
         setRunningSkill(null);
         es.close();
