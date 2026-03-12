@@ -336,39 +336,56 @@ async function reconstructCopyFiles(supabase: any, campaignSlug: string, campaig
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function reconstructLeadsCSV(supabase: any, campaignSlug: string, campaignDir: string): Promise<void> {
+  console.log('[vercel-paths] reconstructLeadsCSV: starting for slug', campaignSlug);
   const leadsDir = path.join(campaignDir, 'leads');
   fs.mkdirSync(leadsDir, { recursive: true });
 
   const leadsFile = path.join(leadsDir, 'all_leads.csv');
-  if (fs.existsSync(leadsFile)) return;
+  if (fs.existsSync(leadsFile)) {
+    console.log('[vercel-paths] reconstructLeadsCSV: file already exists, skipping');
+    return;
+  }
 
-  const { data: campaign } = await supabase
+  const { data: campaign, error: campaignErr } = await supabase
     .from('campaigns')
     .select('id')
     .eq('slug', campaignSlug)
     .single();
 
-  if (!campaign?.id) return;
+  if (!campaign?.id) {
+    console.log('[vercel-paths] reconstructLeadsCSV: campaign not found for slug', campaignSlug, 'error:', campaignErr?.message);
+    return;
+  }
+  console.log('[vercel-paths] reconstructLeadsCSV: campaign id =', campaign.id);
 
   // Skill 4 stores companies in campaign_companies and contacts in contacts
   // (linked via company_id). The campaign_contacts table may be empty, so we
   // join through campaign_companies → companies → contacts instead.
-  const { data: ccRows } = await supabase
+  const { data: ccRows, error: ccErr } = await supabase
     .from('campaign_companies')
     .select('company_id, signal_details, fit_score')
     .eq('campaign_id', campaign.id);
 
-  if (!ccRows?.length) return;
+  if (!ccRows?.length) {
+    console.log('[vercel-paths] reconstructLeadsCSV: no campaign_companies rows for campaign', campaign.id, 'error:', ccErr?.message);
+    return;
+  }
+  console.log('[vercel-paths] reconstructLeadsCSV: found', ccRows.length, 'campaign_companies rows');
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const companyIds = ccRows.map((r: any) => r.company_id).filter(Boolean);
-  if (!companyIds.length) return;
+  if (!companyIds.length) {
+    console.log('[vercel-paths] reconstructLeadsCSV: no valid company_ids after filter');
+    return;
+  }
 
   // Fetch companies
-  const { data: companies } = await supabase
+  const { data: companies, error: compErr } = await supabase
     .from('companies')
     .select('id, name, domain, fit_score')
     .in('id', companyIds);
+
+  console.log('[vercel-paths] reconstructLeadsCSV: fetched', companies?.length ?? 0, 'companies', compErr ? 'error: ' + compErr.message : '');
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const companyMap: Map<string, any> = new Map((companies ?? []).map((c: any) => [c.id, c]));
@@ -377,12 +394,16 @@ async function reconstructLeadsCSV(supabase: any, campaignSlug: string, campaign
   const signalMap: Map<string, any> = new Map(ccRows.map((r: any) => [r.company_id, r]));
 
   // Fetch contacts belonging to these companies
-  const { data: contacts } = await supabase
+  const { data: contacts, error: contactErr } = await supabase
     .from('contacts')
     .select('first_name, last_name, title, email, linkedin_url, company_id')
     .in('company_id', companyIds);
 
-  if (!contacts?.length) return;
+  if (!contacts?.length) {
+    console.log('[vercel-paths] reconstructLeadsCSV: no contacts found for', companyIds.length, 'companies', contactErr ? 'error: ' + contactErr.message : '');
+    return;
+  }
+  console.log('[vercel-paths] reconstructLeadsCSV: fetched', contacts.length, 'contacts');
 
   const q = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const header = 'company_name,company_domain,hiring_signal,job_url,posted_at,fit_score,first_name,last_name,title,email,linkedin_url';
