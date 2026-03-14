@@ -217,11 +217,12 @@ export async function runSkill4FindLeads(): Promise<void> {
       if (verticalCtx.effectiveVertical) {
         verticalContext = verticalCtx.context;
         // Override role list with vertical-specific roles if available
-        if (VERTICAL_ROLE_MAP[verticalCtx.effectiveVertical]) {
-          roles = VERTICAL_ROLE_MAP[verticalCtx.effectiveVertical];
+        const verticalRoles = VERTICAL_ROLE_MAP[verticalCtx.effectiveVertical];
+        if (verticalRoles && verticalRoles.length > 0) {
+          roles = verticalRoles;
           tracker.completeStep(
             'Load vertical context',
-            `vertical="${verticalCtx.effectiveVerticalName}", roles overridden to ${roles.length} vertical-specific roles, sections=[${verticalCtx.loadedSections.join(', ')}]`
+            `vertical="${verticalCtx.effectiveVerticalName}", roles overridden to ${roles.length} vertical-specific roles [${verticalRoles.slice(0, 3).join(', ')}, ...], sections=[${verticalCtx.loadedSections.join(', ')}]`
           );
         } else {
           tracker.completeStep(
