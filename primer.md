@@ -43,7 +43,7 @@ Signal-driven outbound campaign automation for CirrusLabs's staffing/consulting 
 
 ## Database Schema
 
-**Supabase** — 5 migrations applied:
+**Supabase** — 7 migrations applied:
 
 | Migration | Purpose |
 |-----------|---------|
@@ -52,8 +52,10 @@ Signal-driven outbound campaign automation for CirrusLabs's staffing/consulting 
 | `003_outreach_intelligence.sql` | Intelligence tables: company_intelligence, contact_intelligence, segment_summaries |
 | `004_dedup_constraints.sql` | UNIQUE constraint on contacts(email) |
 | `005_campaign_sequences.sql` | campaign_sequences table with UNIQUE(campaign_id, segment_key) |
+| `006_verticals.sql` | verticals table, FK columns on offers + campaigns |
+| `007_geography.sql` | allowed_countries + allowed_us_states (jsonb) on offers + campaigns |
 
-**Key tables:** offers, companies, contacts, campaigns, campaign_companies, message_variants, messages, tool_usage, skill_runs, company_intelligence, contact_intelligence, segment_summaries, campaign_sequences
+**Key tables:** offers, companies, contacts, campaigns, campaign_companies, message_variants, messages, tool_usage, skill_runs, company_intelligence, contact_intelligence, segment_summaries, campaign_sequences, verticals
 
 **RLS:** Disabled (commented out in migration) — anon key can read all tables.
 
@@ -149,6 +151,7 @@ Signal-driven outbound campaign automation for CirrusLabs's staffing/consulting 
 | File | Purpose |
 |------|---------|
 | `src/lib/services/scoring.ts` | ICP scoring (threshold 170 pts, hardcoded tech keywords — vertical scoring.md loaded but not yet programmatically applied) |
+| `src/lib/services/geography.ts` | Geography filtering — resolveGeography(), checkCompanyGeography(), buildApolloLocationFilter(), rejection logging |
 | `src/lib/services/deduplication.ts` | Email + domain dedup |
 | `src/lib/services/personalization.ts` | Placeholder replacement |
 | `src/lib/services/intelligence.ts` | Company classification, segment grouping |
@@ -212,6 +215,29 @@ context/
 ---
 
 ## Change Log
+
+### 2026-03-14 — Geography filtering added to Skill 4
+
+**What:** Geography enforcement system for Skill 4 (Find Leads).
+
+**Files added/modified:**
+- `src/lib/services/geography.ts` (NEW) — Single source of truth for all geography logic: `resolveGeography()`, `checkCompanyGeography()`, `buildApolloLocationFilter()`, rejection + summary logging helpers
+- `supabase/migrations/007_geography.sql` (NEW) — Adds `allowed_countries` + `allowed_us_states` (jsonb) to both `offers` and `campaigns` tables
+- `src/core/skills/skill-4-find-leads.ts` (MODIFIED) — Reads geo config from DB on startup, passes `buildApolloLocationFilter()` to Apollo query, runs post-query `checkCompanyGeography()` rejection pass before contact enrichment
+
+**Resolution order (mirrors vertical inheritance):**
+- `campaign.allowed_countries ?? offer.allowed_countries ?? DEFAULT_ALLOWED_COUNTRIES`
+- `campaign.allowed_us_states ?? offer.allowed_us_states ?? null` (null = all states)
+
+**Default scope:** Americas — United States, Canada, Mexico, Brazil, Argentina, Chile, Colombia, Peru, Uruguay
+
+**Behavior:** Singapore, India, UK, etc. are logged with `[GEOGRAPHY REJECT]` messages and excluded before contact enrichment (saves Apollo credits). Summary line printed at end of Skill 4 run.
+
+**Migration 007 applied to live Supabase** — both columns added to offers + campaigns tables.
+
+**Remaining:** Geography config UI in offer/campaign create forms (backend fully wired; frontend fields not yet built).
+
+---
 
 ### 2026-03-13 — Section 4 vertical UI implemented
 
@@ -434,6 +460,7 @@ context/verticals/cloud-software-delivery/
 ## What Should Be Worked On Next
 
 1. **Run end-to-end demo with a vertical-aware offer** — Section 4 UI is complete; validate the full resolution chain in production: create offer with staffing vertical → create campaign → confirm `EffectiveVerticalBadge` shows "(offer)" → add campaign override → confirm badge updates to "(override)"
-2. **Make scoring vertical-configurable** — `scoring.ts` currently hardcoded; vertical `scoring.md` should influence ICP scoring weights
-3. **Skills 4 & 5: actively consume vertical context** — Both load context via `buildSkillContext()` but currently only log/display it; could use vertical ICP/signals/scoring to influence company filtering and sequence strategy
-4. **Run live skill execution with vertical** — "Talent As A Service - US" now has `default_vertical_id = staffing`; run Skills 1-6 via dashboard or CLI to verify context appears in outputs
+2. **Geography UI** — Add `allowed_countries` / `allowed_us_states` config fields to offer/campaign create forms so operators can set geography scope from the dashboard (migration 007 applied; backend fully wired; frontend UI not yet built)
+3. **Make scoring vertical-configurable** — `scoring.ts` currently hardcoded; vertical `scoring.md` should influence ICP scoring weights
+4. **Skills 4 & 5: actively consume vertical context** — Both load context via `buildSkillContext()` but currently only log/display it; could use vertical ICP/signals/scoring to influence company filtering and sequence strategy
+5. **Run live skill execution with vertical** — "Talent As A Service - US" now has `default_vertical_id = staffing`; run Skills 1-6 via dashboard or CLI to verify context appears in outputs
