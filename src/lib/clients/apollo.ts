@@ -661,7 +661,9 @@ export async function getSequenceMetrics(sequenceId: string): Promise<SequenceMe
     id: c.id,
     name: c.name,
     contacts_count: c.num_contacts || 0,
-    emails_sent: c.num_send_email_steps || 0,
+    // num_sent_emails = delivery volume (preferred); fallback to emails_sent_count or
+    // num_contacts as proxy if delivery volume unavailable
+    emails_sent: c.num_sent_emails ?? c.emails_sent_count ?? c.num_contacts ?? 0,
     open_rate: c.open_rate || 0,
     reply_rate: c.reply_rate || 0,
     bounce_rate: c.bounce_rate || 0,
