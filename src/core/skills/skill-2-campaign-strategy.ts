@@ -11,6 +11,7 @@ import { fileURLToPath } from 'url';
 import { getSupabaseClient } from '../../lib/supabase.ts';
 import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
 import { validateSkillInputs } from '../../lib/services/validation.ts';
+import { buildSkillContext } from '../../lib/verticals/index.ts';
 import readline from 'readline';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -28,6 +29,7 @@ export interface CampaignConfig {
   buyerFilters: string;
   expectedVolume: string;
   expectedFit: string;
+  vertical_id?: string;
 }
 
 interface CampaignStrategyInput extends CampaignConfig {
@@ -68,6 +70,7 @@ export async function runSkill2CampaignStrategy(offerSlug?: string, config?: Cam
   tracker.step('Gather strategy input');
   tracker.step('Write strategy.md');
   tracker.step('Save to database');
+  tracker.step('Load vertical context');
 
   let input: CampaignStrategyInput;
 
@@ -189,6 +192,7 @@ export async function runSkill2CampaignStrategy(offerSlug?: string, config?: Cam
           primary_api: input.primaryAPI,
           messaging_framework: input.messagingFramework,
         },
+        vertical_id: config?.vertical_id || null,
       },
       { onConflict: 'offer_id,slug' }
     );
@@ -197,6 +201,40 @@ export async function runSkill2CampaignStrategy(offerSlug?: string, config?: Cam
     } else {
       tracker.completeStep('Save to database', 'Upserted campaign record');
     }
+  }
+
+  // ─── Step 5: Load vertical context (if configured) ───
+  tracker.startStep('Load vertical context');
+  try {
+    // Look up offer + campaign IDs for vertical resolution
+    const { data: offerRow } = await sb
+      .from('offers')
+      .select('id')
+      .eq('slug', input.offerSlug)
+      .single();
+
+    if (offerRow?.id) {
+      const { data: campaignRow } = await sb
+        .from('campaigns')
+        .select('id')
+        .eq('offer_id', offerRow.id)
+        .eq('slug', input.campaignSlug)
+        .single();
+
+      const verticalCtx = await buildSkillContext('skill-2', offerRow.id, campaignRow?.id);
+      if (verticalCtx.effectiveVertical) {
+        // Append vertical context to the strategy file
+        const existingContent = fs.readFileSync(strategyPath, 'utf-8');
+        fs.writeFileSync(strategyPath, existingContent + '\n' + verticalCtx.context);
+        tracker.completeStep('Load vertical context', `vertical="${verticalCtx.effectiveVertical}", sections=[${verticalCtx.loadedSections.join(', ')}]`);
+      } else {
+        tracker.completeStep('Load vertical context', 'No vertical configured');
+      }
+    } else {
+      tracker.completeStep('Load vertical context', 'Skipped — offer not found in DB');
+    }
+  } catch (err) {
+    tracker.partialStep('Load vertical context', `Warning: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   tracker.printSummary();
