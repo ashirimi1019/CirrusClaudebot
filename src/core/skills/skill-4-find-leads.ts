@@ -52,6 +52,51 @@ const ICP_TITLES = [
 // Default employee ranges matching ICP (50-5000)
 const ICP_EMPLOYEE_RANGES = ['51,200', '201,500', '501,1000', '1001,5000'];
 
+/**
+ * Vertical-specific role lists for Apollo hiring-signal search.
+ * When a vertical is active, this list replaces the generic default.
+ * Roles are chosen based on the vertical's ICP hiring patterns.
+ * Note: staffing intentionally matches the default (targets all engineering roles).
+ */
+const VERTICAL_ROLE_MAP: Record<string, string[]> = {
+  'staffing': [
+    'Data Engineer',
+    'Machine Learning Engineer',
+    'Backend Engineer',
+    'Software Engineer',
+    'Cloud Engineer',
+    'DevOps Engineer',
+    'Platform Engineer',
+    'AI Engineer',
+    'Data Scientist',
+    'Full Stack Engineer',
+  ],
+  'ai-data-consulting': [
+    'Data Engineer',
+    'Machine Learning Engineer',
+    'AI Engineer',
+    'Data Scientist',
+    'Analytics Engineer',
+    'MLOps Engineer',
+    'Data Platform Engineer',
+    'Research Engineer',
+    'NLP Engineer',
+    'Computer Vision Engineer',
+  ],
+  'cloud-software-delivery': [
+    'Cloud Engineer',
+    'DevOps Engineer',
+    'Platform Engineer',
+    'Site Reliability Engineer',
+    'Infrastructure Engineer',
+    'Kubernetes Engineer',
+    'Backend Engineer',
+    'Software Engineer',
+    'Cloud Architect',
+    'Solutions Architect',
+  ],
+};
+
 function createReadlineInterface(): readline.Interface {
   return readline.createInterface({ input: process.stdin, output: process.stdout });
 }
@@ -143,7 +188,7 @@ export async function runSkill4FindLeads(): Promise<void> {
 
   const strategyPath = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlug, 'strategy.md');
   const strategy = readFile(strategyPath);
-  const { roles } = parseStrategy(strategy);
+  let { roles } = parseStrategy(strategy);
   tracker.completeStep('Validate inputs', `${roles.length} roles`);
 
   // ─── Step 1b: Load vertical context (if configured) ───
@@ -171,10 +216,19 @@ export async function runSkill4FindLeads(): Promise<void> {
       const verticalCtx = await buildSkillContext('skill-4', offerRow.id, campaignRow?.id);
       if (verticalCtx.effectiveVertical) {
         verticalContext = verticalCtx.context;
-        tracker.completeStep(
-          'Load vertical context',
-          `vertical="${verticalCtx.effectiveVerticalName}", sections=[${verticalCtx.loadedSections.join(', ')}]`
-        );
+        // Override role list with vertical-specific roles if available
+        if (VERTICAL_ROLE_MAP[verticalCtx.effectiveVertical]) {
+          roles = VERTICAL_ROLE_MAP[verticalCtx.effectiveVertical];
+          tracker.completeStep(
+            'Load vertical context',
+            `vertical="${verticalCtx.effectiveVerticalName}", roles overridden to ${roles.length} vertical-specific roles, sections=[${verticalCtx.loadedSections.join(', ')}]`
+          );
+        } else {
+          tracker.completeStep(
+            'Load vertical context',
+            `vertical="${verticalCtx.effectiveVerticalName}", sections=[${verticalCtx.loadedSections.join(', ')}]`
+          );
+        }
       } else {
         tracker.completeStep('Load vertical context', 'No vertical configured — using base ICP/scoring');
       }
