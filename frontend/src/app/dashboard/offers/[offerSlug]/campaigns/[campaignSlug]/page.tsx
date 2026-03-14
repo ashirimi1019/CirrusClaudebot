@@ -224,6 +224,18 @@ function ConfidenceBadge({ confidence }: { confidence: number | null | undefined
   return <span className={`text-xs font-mono font-semibold ${color}`}>{pct}%</span>;
 }
 
+function EffectiveVerticalBadge({ vertical }: { vertical: { name: string; source: 'campaign' | 'offer' | 'none' } | null }) {
+  if (!vertical || vertical.source === 'none') return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 whitespace-nowrap">
+      {vertical.name}
+      <span className="text-indigo-400/50">
+        {vertical.source === 'campaign' ? '(override)' : '(offer)'}
+      </span>
+    </span>
+  );
+}
+
 // ─── Accent color per segment (for left borders) ────────────────────────────
 
 function getSegmentAccentColor(segmentKey: string): string {
@@ -643,26 +655,39 @@ export default function CampaignDashboardPage() {
   // ── Resolve campaign ID + name from slugs ──────────────────────────────────
   const [campaignId, setCampaignId] = useState<string | null>(null);
   const [campaignName, setCampaignName] = useState<string | null>(null);
+  const [effectiveVertical, setEffectiveVertical] = useState<{ name: string; source: 'campaign' | 'offer' | 'none' } | null>(null);
 
   useEffect(() => {
     const supabase = createClient();
     supabase
       .from('offers')
-      .select('id')
+      .select('id, default_vertical_id, verticals(id, name, slug)')
       .eq('slug', offerSlug)
       .single()
-      .then(({ data: offer }: { data: { id: string } | null }) => {
+      .then(({ data: offer }: { data: any | null }) => {
         if (!offer) return;
         supabase
           .from('campaigns')
-          .select('id, name')
+          .select('id, name, vertical_id, verticals(id, name, slug)')
           .eq('offer_id', offer.id)
           .eq('slug', campaignSlug)
           .single()
-          .then(({ data: campaign }: { data: { id: string; name: string | null } | null }) => {
+          .then(({ data: campaign }: { data: any | null }) => {
             if (campaign) {
               setCampaignId(campaign.id);
               setCampaignName(campaign.name);
+
+              const campaignVerticalName = campaign?.verticals?.name ?? null;
+              const offerVerticalName = offer?.verticals?.name ?? null;
+              const campaignVerticalId = campaign?.vertical_id ?? null;
+
+              if (campaignVerticalId && campaignVerticalName) {
+                setEffectiveVertical({ name: campaignVerticalName, source: 'campaign' });
+              } else if (offerVerticalName) {
+                setEffectiveVertical({ name: offerVerticalName, source: 'offer' });
+              } else {
+                setEffectiveVertical({ name: '', source: 'none' });
+              }
             }
           });
       });
@@ -937,6 +962,7 @@ export default function CampaignDashboardPage() {
             <h1 className="text-sm font-semibold text-white truncate">{campaignName ?? campaignSlug}</h1>
           </div>
         </div>
+        <EffectiveVerticalBadge vertical={effectiveVertical} />
         <button
           onClick={fetchStatus}
           disabled={statusLoading}
