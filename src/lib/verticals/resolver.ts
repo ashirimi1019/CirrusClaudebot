@@ -29,11 +29,13 @@ export async function getEffectiveVertical(
 
   // Check campaign override first
   if (campaignId) {
-    const { data: campaign } = await supabase
+    const { data: campaign, error: campaignErr } = await supabase
       .from('campaigns')
       .select('vertical_id')
       .eq('id', campaignId)
       .single();
+
+    if (campaignErr) console.warn('[getEffectiveVertical] campaign query error:', campaignErr.message);
 
     if (campaign?.vertical_id) {
       const vertical = await lookupVertical(campaign.vertical_id);
@@ -44,11 +46,13 @@ export async function getEffectiveVertical(
   }
 
   // Fall back to offer default
-  const { data: offer } = await supabase
+  const { data: offer, error: offerErr } = await supabase
     .from('offers')
     .select('default_vertical_id')
     .eq('id', offerId)
     .single();
+
+  if (offerErr) console.warn('[getEffectiveVertical] offer query error:', offerErr.message);
 
   if (offer?.default_vertical_id) {
     const vertical = await lookupVertical(offer.default_vertical_id);

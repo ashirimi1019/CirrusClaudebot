@@ -32,9 +32,9 @@ Priority signals: active AI/ML hiring, data platform modernization projects, rec
 
 | Factor | Points | Notes |
 |--------|--------|-------|
-| Revenue 0M-00M (mid-market sweet spot) | 20-30 | Large enough for budget, small enough to need help |
+| Revenue $20M-$500M (mid-market sweet spot) | 20-30 | Large enough for budget, small enough to need help |
 | Series B-D funded (venture-backed growth stage) | 15-25 | Growth capital available, pressure to scale |
-| Enterprise 00M+ with innovation/transformation mandate | 15-25 | Budget exists, but sales cycle longer |
+| Enterprise $500M+ with innovation/transformation mandate | 15-25 | Budget exists, but sales cycle longer |
 | Tech-forward industry (fintech, healthtech, e-commerce, SaaS) | 10-20 | Higher data maturity baseline |
 | Data-intensive business model (marketplace, financial services, logistics) | 15-25 | Natural need for advanced data capabilities |
 | Engineering team 50-500 (enough to need help, not enough to do it all) | 10-20 | Capacity gap is real |
@@ -63,7 +63,7 @@ Priority signals: active AI/ML hiring, data platform modernization projects, rec
 | Warm | 120-169 | Nurture — monitor for signal strengthening before outreach |
 | Low Priority | <120 | Do not enrich contacts — insufficient signal for AI/data consulting |
 
-**Note:** The 170-point threshold aligns with the existing  ICP threshold. Leads scoring 170+ should be enriched for contact discovery.
+**Note:** The 170-point threshold aligns with the existing `scoring.ts` ICP threshold. Leads scoring 170+ should be enriched for contact discovery.
 
 ---
 
@@ -97,9 +97,9 @@ Automatically disqualify (score = 0) if any apply:
 
 These weights are **starter guidance** for the AI & Data Consulting vertical. They are designed to:
 
-1. Work alongside the existing  ICP scoring (which uses a 170-point threshold)
+1. Work alongside the existing `scoring.ts` ICP scoring (which uses a 170-point threshold)
 2. Provide vertical-specific signal interpretation (e.g., data engineer hiring is weighted higher here than in staffing)
 3. Be refined based on campaign results — Skill 6 learnings should update these weights over time
-4. Eventually feed into programmatic scoring when  becomes vertical-configurable
+4. Eventually feed into programmatic scoring when `scoring.ts` becomes vertical-configurable
 
 The qualitative guidance here should influence how Skill 4 interprets search results and how Skill 5 prioritizes segments for outreach.

@@ -37,6 +37,9 @@ function getServiceClient() {
   );
 }
 
+// Module-level singleton — avoids creating a new connection pool per request
+const adminDb = getServiceClient();
+
 /** Extract the authenticated user ID from request cookies (non-fatal). */
 async function getUserId(request: NextRequest): Promise<string | null> {
   try {
@@ -65,7 +68,7 @@ async function resolveIds(
   offerSlug: string,
   campaignSlug: string,
 ): Promise<{ offerId: string | null; campaignId: string | null }> {
-  const sb = getServiceClient();
+  const sb = adminDb;
   let offerId: string | null = null;
   let campaignId: string | null = null;
 
@@ -213,8 +216,23 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Extract authenticated user (non-fatal — anonymous runs still work)
+  // Extract authenticated user — required for cost-bearing skills
   const userId = await getUserId(request);
+  if (!userId) {
+    return new Response(JSON.stringify({ error: 'Authentication required' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Validate slugs to prevent path traversal / injection
+  const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$|^[a-z0-9]$/;
+  if (offer && !SAFE_SLUG.test(offer)) {
+    return new Response(JSON.stringify({ error: 'Invalid offer slug' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }
+  if (campaign && !SAFE_SLUG.test(campaign)) {
+    return new Response(JSON.stringify({ error: 'Invalid campaign slug' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }
 
   const encoder = new TextEncoder();
 
@@ -238,7 +256,7 @@ export async function GET(request: NextRequest) {
       });
 
       // ── Supabase skill_runs tracking ──────────────────────────────────────
-      const sb = getServiceClient();
+      const sb = adminDb;
       const startedAt = Date.now();
 
       // Resolve offer/campaign IDs for foreign keys

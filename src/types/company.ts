@@ -23,6 +23,7 @@ export interface IcpScore {
   hiring_signal: number;
   company_size: number;
   funding: number;
+  revenue_score: number;
   tech_keywords: number;
   qualifies: boolean;
 }

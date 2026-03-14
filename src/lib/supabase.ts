@@ -20,6 +20,8 @@ export interface Offer {
   buyer_summary: string | null;
   positioning: Record<string, unknown>;
   default_vertical_id: string | null;
+  allowed_countries: string[] | null;
+  allowed_us_states: string[] | null;
   created_at: string;
   updated_at: string;
 }
@@ -35,7 +37,7 @@ export interface Company {
   funding_amount: number | null;
   industry: string | null;
   location: string | null;
-  country: string;
+  country: string | null;
   tech_stack_summary: string | null;
   hiring_signal_summary: string | null;
   company_segment: string | null;
@@ -91,6 +93,8 @@ export interface Campaign {
   strategy: Record<string, unknown> | null;
   strategy_summary: string | null;
   vertical_id: string | null;
+  allowed_countries: string[] | null;
+  allowed_us_states: string[] | null;
   created_at: string;
   updated_at: string;
 }
@@ -106,8 +110,8 @@ export interface CampaignCompany {
   included: boolean;
   exclusion_reason: string | null;
   segment_key: string | null;
-  offer_type: string | null;
-  service_line: string | null;
+  offer_type: 'individual_placement' | 'pod_delivery' | null;
+  service_line: 'data_engineering' | 'ml_ai' | 'cloud_infrastructure' | 'software_development' | 'cyber_security' | null;
   buyer_persona_angle: string | null;
   contact_rationale: string | null;
   intelligence_confidence: number | null;

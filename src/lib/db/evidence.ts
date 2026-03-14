@@ -1,11 +1,6 @@
 import { getSupabaseClient, Evidence, EvidenceType } from '../supabase.ts';
-import { withRetry, isTransientError } from '../services/retry.ts';
-
-function isTransientDbError(error: any): boolean {
-  if (error?.status >= 500) return true;
-  if (error?.code === 'PGRST301') return true;
-  return isTransientError(error);
-}
+import { withRetry } from '../services/retry.ts';
+import { isTransientDbError } from './utils.ts';
 
 export async function insertEvidence(data: {
   company_id: string;

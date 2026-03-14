@@ -191,7 +191,7 @@ export async function searchCompaniesByHiringRoles(
   const companies: ApolloCompany[] = raw.map((org: any) => ({
     id: org.id,
     name: org.name,
-    website_url: org.website_url || org.primary_domain ? `http://${org.primary_domain}` : null,
+    website_url: org.website_url || (org.primary_domain ? `https://${org.primary_domain}` : null),
     linkedin_url: org.linkedin_url || null,
     employee_count: org.estimated_num_employees || org.num_employees || null,
     industry: org.industry || org.sic_codes?.[0] || null,
@@ -323,7 +323,7 @@ export async function listSequences(): Promise<ApolloSequence[]> {
   const client = apolloClient();
 
   const response = await withRetry(
-    () => client.post('/emailer_campaigns/search', { per_page: '50' }),
+    () => client.post('/emailer_campaigns/search', { per_page: 50 }),
     { label: 'apollo_list_sequences', maxAttempts: 3 }
   );
   const data = response.data;
@@ -354,7 +354,7 @@ export async function searchSequenceByName(name: string): Promise<ApolloSequence
     const response = await withRetry(
       () => client.post('/emailer_campaigns/search', {
         q_name: name,
-        per_page: '10',
+        per_page: 10,
       }),
       { label: 'apollo_search_sequence_by_name', maxAttempts: 2 }
     );

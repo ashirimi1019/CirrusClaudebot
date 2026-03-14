@@ -28,6 +28,7 @@ import {
   type GeographyConfig,
   type GeographyRejection,
 } from '../../lib/services/geography.ts';
+import { objectsToCsv } from '../../lib/services/csv-export.ts';
 import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
 import { validateSkillInputs } from '../../lib/services/validation.ts';
 import { buildSkillContext } from '../../lib/verticals/index.ts';
@@ -378,17 +379,34 @@ export async function runSkill4FindLeads(): Promise<void> {
   // ─── Step 6: Write all_leads.csv ───
   tracker.startStep('Write all_leads.csv');
 
-  const header = 'company_name,company_domain,hiring_signal,fit_score,first_name,last_name,title,email,linkedin_url';
-  const rows = contactsOutput.map((c) =>
-    `"${c.company_name}","${c.company_domain}","${c.hiring_signal}","${c.fit_score}","${c.first_name}","${c.last_name}","${c.title}","${c.email}","${c.linkedin_url}"`
-  );
+  const allLeadObjects: Record<string, unknown>[] = contactsOutput.map((c) => ({
+    company_name: c.company_name,
+    company_domain: c.company_domain,
+    hiring_signal: c.hiring_signal,
+    fit_score: c.fit_score,
+    first_name: c.first_name,
+    last_name: c.last_name,
+    title: c.title,
+    email: c.email,
+    linkedin_url: c.linkedin_url,
+  }));
 
   // Add companies without contacts (for reference)
   const companyIdsWithContacts = new Set(contactsOutput.map((c) => c.company_id));
   let companiesWithoutContacts = 0;
   for (const co of companiesOutput) {
     if (!companyIdsWithContacts.has(co.id)) {
-      rows.push(`"${co.name}","${co.domain}","${co.hiring_signal}","${co.fit_score}","","","","",""`);
+      allLeadObjects.push({
+        company_name: co.name,
+        company_domain: co.domain,
+        hiring_signal: co.hiring_signal,
+        fit_score: co.fit_score,
+        first_name: '',
+        last_name: '',
+        title: '',
+        email: '',
+        linkedin_url: '',
+      });
       companiesWithoutContacts++;
     }
   }
@@ -397,7 +415,8 @@ export async function runSkill4FindLeads(): Promise<void> {
     tracker.warn(`${companiesWithoutContacts} qualifying companies had no decision-makers found — included in CSV without contact data.`);
   }
 
-  const csv = [header, ...rows].join('\n');
+  const rows = allLeadObjects;
+  const csv = objectsToCsv(allLeadObjects);
   const allLeadsPath = path.join(leadsDir, 'all_leads.csv');
   fs.writeFileSync(allLeadsPath, csv);
 

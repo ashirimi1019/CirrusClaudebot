@@ -131,7 +131,11 @@ export async function runSkill3CampaignCopy(): Promise<void> {
         buyerTitle: '[Title]',
         evidenceTitle: extractSignalFromStrategy(strategy),
         jobUrl: undefined,
-        additionalContext: verticalContext,
+        additionalContext: [
+          `EMAIL ANGLE FOR THIS VARIANT: ${angle}`,
+          `Use this angle as the primary writing approach for this email variant.`,
+          verticalContext,
+        ].filter(Boolean).join('\n\n'),
       });
       emailVariants.push({ name: `email-variant-${i}`, subject: draft.subject, body: draft.body });
       console.log(`  ✅ Email variant ${i} generated (angle: ${angle})`);
@@ -284,7 +288,7 @@ function getEmailAngle(variant: number): string {
 }
 
 function extractSignalFromStrategy(strategy: string): string {
-  const match = strategy.match(/Signal Hypothesis.*?([^\n]+)/);
+  const match = strategy.match(/Signal Hypothesis[^\n]*\n+([^\n#]+)/);
   return match ? match[1].trim() : 'hiring signal detected';
 }
 

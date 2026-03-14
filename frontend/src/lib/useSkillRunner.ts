@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 
 interface SkillRunnerState {
   logs: string[];
@@ -97,6 +97,13 @@ export function useSkillRunner(
     setLogs([]);
     setIsRunning(false);
     setExitCode(null);
+  }, []);
+
+  // Close EventSource when the component using this hook unmounts
+  useEffect(() => {
+    return () => {
+      esRef.current?.close();
+    };
   }, []);
 
   return { logs, isRunning, exitCode, run, reset, logEndRef };

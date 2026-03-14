@@ -13,7 +13,6 @@
     "skill:5": "node --loader ts-node/esm scripts/run-skill-5-launch-outreach.ts",
     "skill:6": "node --loader ts-node/esm scripts/run-skill-6-campaign-review.ts",
     "pipeline": "node --loader ts-node/esm scripts/run-pipeline.ts",
-    "sheets:sync": "node --loader ts-node/esm scripts/run-sheets-sync.ts",
     "brain": "node --loader ts-node/esm scripts/run-brain.ts",
     "skill:ingest": "node --loader ts-node/esm scripts/run-reply-ingestion.ts",
     "dev": "echo 'Use npm run skill:1 through skill:6 to run individual skills'",
@@ -24,7 +23,6 @@
     "axios": "^1.10.0",
     "csv-parse": "^6.1.0",
     "dotenv": "^16.3.1",
-    "googleapis": "^171.4.0",
     "uuid": "^9.0.1",
     "zod": "^3.25.67"
   },

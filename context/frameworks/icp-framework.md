@@ -38,6 +38,8 @@
   - Mexico (growth stage startups)
   - Colombia (emerging market)
 
+> **Note:** Geography scope defined here is the system default. Individual vertical playbooks (`context/verticals/{slug}/icp.md`) override this for their specific market. The staffing vertical targets US + Singapore + UK; the system default (Americas) applies when no vertical is set.
+
 ---
 
 ## Company ICP Scoring Rubric

@@ -1,5 +1,5 @@
 import { getSupabaseClient, Contact } from '../supabase.ts';
-import { withRetry, isTransientError } from '../services/retry.ts';
+import { withRetry } from '../services/retry.ts';
 import {
   normalizeEmail,
   isValidEmail,
@@ -7,13 +7,7 @@ import {
   findExistingContact,
   type ContactMatchResult,
 } from '../services/deduplication.ts';
-
-/** Retry predicate for Supabase: retry on network errors and 5xx/503 */
-function isTransientDbError(error: any): boolean {
-  if (error?.status >= 500) return true;
-  if (error?.code === 'PGRST301') return true;
-  return isTransientError(error);
-}
+import { isTransientDbError } from './utils.ts';
 
 export interface UpsertContactInput {
   company_id: string;

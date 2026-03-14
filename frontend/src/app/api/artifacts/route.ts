@@ -20,6 +20,9 @@ function getServiceClient() {
   );
 }
 
+// Module-level singleton — avoids creating a new connection pool per request
+const adminDb = getServiceClient();
+
 async function getUserId(request: NextRequest): Promise<string | null> {
   try {
     const supabase = createServerClient(
@@ -48,7 +51,7 @@ export async function GET(request: NextRequest) {
   const skillParam = searchParams.get('skill');
 
   const userId = await getUserId(request);
-  const sb = getServiceClient();
+  const sb = adminDb;
 
   // Build query — join with skill_runs for status/timestamps
   let query = sb

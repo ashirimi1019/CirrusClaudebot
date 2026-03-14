@@ -410,6 +410,13 @@ function useCampaignSkillRunner(offerSlug: string, campaignSlug: string) {
     [isRunning, offerSlug, campaignSlug, scrollToBottom],
   );
 
+  // Close EventSource when the component using this hook unmounts
+  useEffect(() => {
+    return () => {
+      esRef.current?.close();
+    };
+  }, []);
+
   return { logs, isRunning, exitCode, runningSkill, runSkill, logEndRef };
 }
 
@@ -658,6 +665,7 @@ export default function CampaignDashboardPage() {
   const [effectiveVertical, setEffectiveVertical] = useState<{ name: string; source: 'campaign' | 'offer' | 'none' } | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     const supabase = createClient();
     supabase
       .from('offers')
@@ -665,7 +673,7 @@ export default function CampaignDashboardPage() {
       .eq('slug', offerSlug)
       .single()
       .then(({ data: offer }: { data: any | null }) => {
-        if (!offer) return;
+        if (cancelled || !offer) return;
         supabase
           .from('campaigns')
           .select('id, name, vertical_id, verticals(id, name, slug)')
@@ -673,6 +681,7 @@ export default function CampaignDashboardPage() {
           .eq('slug', campaignSlug)
           .single()
           .then(({ data: campaign }: { data: any | null }) => {
+            if (cancelled) return;
             if (campaign) {
               setCampaignId(campaign.id);
               setCampaignName(campaign.name);
@@ -691,6 +700,7 @@ export default function CampaignDashboardPage() {
             }
           });
       });
+    return () => { cancelled = true; };
   }, [offerSlug, campaignSlug]);
 
   // ── Fetch status ────────────────────────────────────────────────────────────
@@ -833,6 +843,9 @@ export default function CampaignDashboardPage() {
       .then(({ data }: { data: CampaignMetrics | null }) => {
         setMetrics(data);
         setMetricsLoading(false);
+      })
+      .catch(() => {
+        setMetricsLoading(false);
       });
   }, [activeTab, campaignId]);
 
@@ -860,72 +873,76 @@ export default function CampaignDashboardPage() {
 
     const supabase = createClient();
 
-    // Fetch company-level intelligence
-    supabase
-      .from('outreach_intelligence')
-      .select(`
-        id, company_id, offer_type, service_line, segment_key,
-        messaging_angle, rationale, confidence, needs_review, fallback_applied,
-        companies ( id, name, domain, fit_score )
-      `)
-      .eq('campaign_id', campaignId)
-      .order('confidence', { ascending: true })
-      .then(({ data }: { data: IntelligenceRow[] | null }) => {
-        setIntelligenceRows(data ?? []);
+    // Fetch all intelligence data in parallel; clear loading only when all three settle
+    Promise.all([
+      // Query 1: company-level intelligence
+      supabase
+        .from('outreach_intelligence')
+        .select(`
+          id, company_id, offer_type, service_line, segment_key,
+          messaging_angle, rationale, confidence, needs_review, fallback_applied,
+          companies ( id, name, domain, fit_score )
+        `)
+        .eq('campaign_id', campaignId)
+        .order('confidence', { ascending: true })
+        .then(({ data }: { data: IntelligenceRow[] | null }) => {
+          setIntelligenceRows(data ?? []);
 
-        // Build segment summaries
-        const segMap = new Map<string, { count: number; needsReview: number }>();
-        for (const row of (data ?? [])) {
-          const entry = segMap.get(row.segment_key) || { count: 0, needsReview: 0 };
-          entry.count++;
-          if (row.needs_review) entry.needsReview++;
-          segMap.set(row.segment_key, entry);
-        }
-        setSegmentSummaries(
-          Array.from(segMap.entries()).map(([key, stats]) => ({
-            segment_key: key,
-            company_count: stats.count,
-            needs_review_count: stats.needsReview,
-          })),
-        );
-      });
+          // Build segment summaries
+          const segMap = new Map<string, { count: number; needsReview: number }>();
+          for (const row of (data ?? [])) {
+            const entry = segMap.get(row.segment_key) || { count: 0, needsReview: 0 };
+            entry.count++;
+            if (row.needs_review) entry.needsReview++;
+            segMap.set(row.segment_key, entry);
+          }
+          setSegmentSummaries(
+            Array.from(segMap.entries()).map(([key, stats]) => ({
+              segment_key: key,
+              company_count: stats.count,
+              needs_review_count: stats.needsReview,
+            })),
+          );
+        }),
 
-    // Fetch contact-level intelligence
-    supabase
-      .from('campaign_contacts')
-      .select(`
-        id, segment_key, buyer_persona_angle, contact_rationale,
-        intelligence_confidence, needs_review,
-        contacts ( id, first_name, last_name, title, email ),
-        companies ( id, name, domain )
-      `)
-      .eq('campaign_id', campaignId)
-      .not('segment_key', 'is', null)
-      .order('intelligence_confidence', { ascending: true })
-      .then(({ data }: { data: ContactIntelligenceRow[] | null }) => {
-        setContactIntelligence(data ?? []);
-        setIntelligenceLoading(false);
-      });
+      // Query 2: contact-level intelligence
+      supabase
+        .from('campaign_contacts')
+        .select(`
+          id, segment_key, buyer_persona_angle, contact_rationale,
+          intelligence_confidence, needs_review,
+          contacts ( id, first_name, last_name, title, email ),
+          companies ( id, name, domain )
+        `)
+        .eq('campaign_id', campaignId)
+        .not('segment_key', 'is', null)
+        .order('intelligence_confidence', { ascending: true })
+        .then(({ data }: { data: ContactIntelligenceRow[] | null }) => {
+          setContactIntelligence(data ?? []);
+        }),
 
-    // Fetch routing stats from messages table
-    supabase
-      .from('messages')
-      .select('segment_key, apollo_sequence_id, send_status')
-      .eq('campaign_id', campaignId)
-      .then(({ data: msgData }: { data: { segment_key: string; apollo_sequence_id: string; send_status: string }[] | null }) => {
-        if (msgData?.length) {
-          const grouped: Record<string, RoutingStat> = {};
-          msgData.forEach((m) => {
-            const key = m.segment_key || 'unassigned';
-            if (!grouped[key]) grouped[key] = { segment_key: key, apollo_sequence_id: m.apollo_sequence_id, total_contacts: 0, sent: 0, pending: 0, failed: 0 };
-            grouped[key].total_contacts++;
-            if (m.send_status === 'sent') grouped[key].sent++;
-            else if (m.send_status === 'failed') grouped[key].failed++;
-            else grouped[key].pending++;
-          });
-          setRoutingStats(Object.values(grouped));
-        }
-      });
+      // Query 3: routing stats from messages table
+      supabase
+        .from('messages')
+        .select('segment_key, apollo_sequence_id, send_status')
+        .eq('campaign_id', campaignId)
+        .then(({ data: msgData }: { data: { segment_key: string; apollo_sequence_id: string; send_status: string }[] | null }) => {
+          if (msgData?.length) {
+            const grouped: Record<string, RoutingStat> = {};
+            msgData.forEach((m) => {
+              const key = m.segment_key || 'unassigned';
+              if (!grouped[key]) grouped[key] = { segment_key: key, apollo_sequence_id: m.apollo_sequence_id, total_contacts: 0, sent: 0, pending: 0, failed: 0 };
+              grouped[key].total_contacts++;
+              if (m.send_status === 'sent') grouped[key].sent++;
+              else if (m.send_status === 'failed') grouped[key].failed++;
+              else grouped[key].pending++;
+            });
+            setRoutingStats(Object.values(grouped));
+          }
+        }),
+    ]).finally(() => {
+      setIntelligenceLoading(false);
+    });
   }, [activeTab, campaignId]);
 
   // Refresh artifacts when a skill finishes

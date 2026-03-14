@@ -33,7 +33,7 @@ type Campaign = {
 
 function deriveStatus(c: Campaign): "active" | "complete" | "draft" {
   if (!c.campaign_metrics?.length) return "draft";
-  const m = c.campaign_metrics[0];
+  const m = c.campaign_metrics.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
   if (!m.total_messages) return "draft";
   const daysSince = (Date.now() - new Date(m.created_at).getTime()) / 86400000;
   return daysSince > 21 ? "complete" : "active";
@@ -86,10 +86,13 @@ export default function CampaignsPage() {
     filter === "all" ? true : deriveStatus(c) === filter
   );
 
-  const totalSent = campaigns.reduce((sum, c) => sum + (c.campaign_metrics?.[0]?.total_messages ?? 0), 0);
-  const totalMeetings = campaigns.reduce((sum, c) => sum + (c.campaign_metrics?.[0]?.total_meetings ?? 0), 0);
+  const latestMetric = (c: Campaign) =>
+    c.campaign_metrics?.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+
+  const totalSent = campaigns.reduce((sum, c) => sum + (latestMetric(c)?.total_messages ?? 0), 0);
+  const totalMeetings = campaigns.reduce((sum, c) => sum + (latestMetric(c)?.total_meetings ?? 0), 0);
   const avgReply = campaigns.length
-    ? campaigns.reduce((sum, c) => sum + (c.campaign_metrics?.[0]?.reply_rate ?? 0), 0) / campaigns.length
+    ? campaigns.reduce((sum, c) => sum + (latestMetric(c)?.reply_rate ?? 0), 0) / campaigns.length
     : 0;
 
   const counts = {
@@ -192,7 +195,7 @@ export default function CampaignsPage() {
               {filtered.map((c) => {
                 const status = deriveStatus(c);
                 const s = statusConfig[status];
-                const m = c.campaign_metrics?.[0];
+                const m = latestMetric(c);
                 const href = c.offers?.slug
                   ? `/dashboard/offers/${c.offers.slug}/campaigns/${c.slug}`
                   : null;

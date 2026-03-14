@@ -60,27 +60,33 @@ export const WRITE_BASE = IS_VERCEL ? '/tmp/cirrus-work' : REPO_ROOT;
 
 // ─── Context file copying ─────────────────────────────────────────────────────
 
-let contextCopied = false;
+let contextCopyPromise: Promise<void> | null = null;
 
 /**
  * Copy the static context/ directory from the deployment bundle into /tmp so
  * skills can read email-principles.md etc. via process.cwd().
  * Safe to call multiple times — only runs once per cold start.
+ * Uses a Promise singleton to prevent concurrent cold starts from racing.
  */
 export async function ensureContextFiles(): Promise<void> {
-  if (!IS_VERCEL || contextCopied) return;
+  if (!IS_VERCEL) return;
 
-  const srcContext = path.join(REPO_ROOT, 'context');
-  const dstContext = path.join(WRITE_BASE, 'context');
+  if (!contextCopyPromise) {
+    contextCopyPromise = (async () => {
+      const srcContext = path.join(REPO_ROOT, 'context');
+      const dstContext = path.join(WRITE_BASE, 'context');
 
-  if (!fs.existsSync(srcContext)) {
-    console.warn('[vercel-paths] context/ not found at', srcContext);
-    return;
+      if (!fs.existsSync(srcContext)) {
+        console.warn('[vercel-paths] context/ not found at', srcContext);
+        return;
+      }
+
+      copyDirRecursive(srcContext, dstContext);
+      console.log('[vercel-paths] context/ ready at', dstContext);
+    })();
   }
 
-  copyDirRecursive(srcContext, dstContext);
-  contextCopied = true;
-  console.log('[vercel-paths] context/ ready at', dstContext);
+  await contextCopyPromise;
 }
 
 function copyDirRecursive(src: string, dst: string): void {

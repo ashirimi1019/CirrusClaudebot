@@ -5,6 +5,8 @@
 frontend/.env
 frontend/.env.local
 frontend/.env.*.local
+# Frontend env files (contain sensitive keys)
+frontend/.env.production
 
 # Dependencies
 node_modules/

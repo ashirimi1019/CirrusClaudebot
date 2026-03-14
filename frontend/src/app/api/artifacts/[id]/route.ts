@@ -18,6 +18,9 @@ function getServiceClient() {
   );
 }
 
+// Module-level singleton — avoids creating a new connection pool per request
+const adminDb = getServiceClient();
+
 const CONTENT_TYPES: Record<string, string> = {
   md: 'text/markdown; charset=utf-8',
   csv: 'text/csv; charset=utf-8',
@@ -31,7 +34,7 @@ export async function GET(
 ) {
   const { id } = await params;
 
-  const sb = getServiceClient();
+  const sb = adminDb;
   const { data: artifact, error } = await sb
     .from('artifacts')
     .select('file_path, file_type, file_name')

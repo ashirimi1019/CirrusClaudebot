@@ -186,6 +186,11 @@ export function checkCompanyGeography(
   const { allowedCountries, allowedUsStates } = config;
 
   if (!company.country) {
+    // Apollo frequently omits country for US companies.
+    // When US is in the allowlist, pass through rather than hard-reject.
+    if (allowedCountries.some(c => c.toLowerCase() === 'united states')) {
+      return null; // allow — treat as potentially US
+    }
     return {
       companyName: company.name,
       companyDomain: company.domain,
@@ -244,6 +249,9 @@ export function buildApolloLocationFilter(config: GeographyConfig): string[] {
     if (apolloName === 'United States' && allowedUsStates !== null && allowedUsStates.length > 0) {
       // When specific US states are selected, add each state individually.
       // Apollo supports state-level location filtering.
+      // Also push "United States" so Apollo returns all US companies; post-query
+      // filter will enforce the state restriction.
+      locations.push('United States');
       for (const state of allowedUsStates) {
         locations.push(state);
       }

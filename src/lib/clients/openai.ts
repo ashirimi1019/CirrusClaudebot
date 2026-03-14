@@ -56,8 +56,9 @@ export async function generateDraft(input: DraftGenerationInput): Promise<Genera
         messages: [
           {
             role: 'system',
-            content:
-              'You are an expert B2B outreach copywriter for staffing/talent acquisition. You write emails that convert. Follow the principles provided and generate compelling, personalized emails that reference specific signals. Your emails are professional, direct, and honest—never generic filler.',
+            content: input.additionalContext?.includes('VERTICAL:') || input.additionalContext?.includes('## Overview')
+              ? 'You are an expert B2B outreach copywriter specializing in technology services. You write compelling, signal-driven cold emails that convert.'
+              : 'You are an expert B2B outreach copywriter for staffing/talent acquisition. You write emails that convert. Follow the principles provided and generate compelling, personalized emails that reference specific signals. Your emails are professional, direct, and honest—never generic filler.',
           },
           {
             role: 'user',

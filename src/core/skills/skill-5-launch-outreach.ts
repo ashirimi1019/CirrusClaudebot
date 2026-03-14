@@ -750,17 +750,17 @@ export async function runSkill5LaunchOutreach(
         totalCreated += ids.length;
         console.log(`  ✅ ${segment.segment_key}: ${ids.length} contacts created`);
 
-        // Sync Apollo contact IDs back to Supabase contacts table
+        // Sync Apollo contact IDs back to Supabase contacts table (match by email, not position)
         const sb = getSupabaseClient();
-        for (let i = 0; i < created.length && i < segment.contacts.length; i++) {
-          const apolloId = created[i].id;
-          const email = segment.contacts[i].email;
-          if (apolloId && email) {
+        for (const apolloContact of created) {
+          if (apolloContact.email) {
             try {
               await sb.from('contacts')
-                .update({ apollo_contact_id: apolloId, updated_at: new Date().toISOString() })
-                .eq('email', email.toLowerCase().trim());
-            } catch { /* best-effort sync — don't fail the step */ }
+                .update({ apollo_contact_id: apolloContact.id })
+                .eq('email', apolloContact.email.toLowerCase().trim());
+            } catch (err) {
+              console.warn('[skill-5] Failed to sync apollo_contact_id for', apolloContact.email, err);
+            }
           }
         }
       } catch (err: any) {

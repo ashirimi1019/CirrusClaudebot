@@ -66,6 +66,7 @@ export function scoreCompany(company: ApolloCompany): IcpScore {
     hiring_signal,
     company_size,
     funding,
+    revenue_score,
     tech_keywords,
     qualifies: total >= ICP_THRESHOLD,
   };

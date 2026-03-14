@@ -3,6 +3,12 @@ import { createClient } from '@supabase/supabase-js';
 import fs from 'fs';
 import path from 'path';
 
+// Module-level singleton — avoids creating a new connection pool per request
+const adminDb = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+);
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const offer = searchParams.get('offer') || '';
@@ -12,10 +18,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'offer is required' }, { status: 400 });
   }
 
-  const sb = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  );
+  const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$|^[a-z0-9]$/;
+  if (offer && !SAFE_SLUG.test(offer)) {
+    return NextResponse.json({ error: 'Invalid offer slug' }, { status: 400 });
+  }
+  if (campaign && !SAFE_SLUG.test(campaign)) {
+    return NextResponse.json({ error: 'Invalid campaign slug' }, { status: 400 });
+  }
+
+  const sb = adminDb;
 
   // Skill 1: offer row exists in DB
   const { data: offerRows } = await sb
