@@ -216,6 +216,50 @@ context/
 
 ## Change Log
 
+### 2026-03-14 — Supabase-backed rate limiting + active-run lock (commits 24e45b9, d5fba22)
+
+**Goal:** Replace Upstash-based rate limiting (which was a dead no-op — env vars never set) with a Supabase-backed implementation that works immediately with the existing stack.
+
+**Why Upstash was replaced:**
+- Upstash is not available in this environment; env vars were never set so rate limiting was always disabled
+- Supabase is already the persistence layer — no new external service needed
+- Minimizing stack sprawl is preferred for an operator-facing internal tool
+
+**What was implemented:**
+
+*Rate limiting (Supabase-backed):*
+- New table: `rate_limit_buckets` (`key`, `route`, `window_start`, `count`, `last_request_at`, UNIQUE on `(key, route, window_start)`)
+- New Postgres function: `increment_rate_limit(p_key, p_route, p_limit, p_window_seconds)` — atomically upserts (INSERT ... ON CONFLICT DO UPDATE) and returns `(allowed, count, reset_at)`
+- Fixed hourly window (`date_trunc('hour', NOW())`)
+- Identity: `user:<userId>` (primary) → `ip:<ip>` (fallback); since `/api/skills/run` requires auth, userId is always available
+- Threshold: **20 requests/hour**
+- Fails open on DB error (does not block legitimate requests)
+- Returns 429 with `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` headers on breach
+
+*Active-run lock:*
+- After rate limit check, before slug validation: queries `skill_runs` for `status='running'` rows
+- Scoped to `campaign_id` when available, falls back to `offer_id` (Skills 1-2 before campaign exists)
+- Returns 409 with `{ error, runningSkill, startedAt }` if a concurrent run is detected
+- TOCTOU race closed: `skill_runs` INSERT now happens BEFORE stream construction (outer handler scope), not inside the SSE stream callback — the active-run lock check reliably sees the row
+
+*Cleanup:*
+- Removed `@upstash/ratelimit` and `@upstash/redis` packages from `frontend/package.json`
+- `.env.example` Upstash section replaced with note that rate limiting is Supabase-backed
+- `frontend/src/lib/rate-limit.ts` fully rewritten (no Upstash references)
+
+**Files changed:**
+- `supabase/migrations/008_rate_limiting.sql` (NEW)
+- `frontend/src/lib/rate-limit.ts` (full rewrite)
+- `frontend/src/app/api/skills/run/route.ts` (rate limit + active-run lock + TOCTOU fix)
+- `frontend/package.json` + `frontend/package-lock.json` (Upstash removed)
+- `.env.example` (Upstash section removed)
+
+**Required deployment step:** Apply migration 008 in Supabase SQL editor. No new env vars needed.
+
+**Remaining gap (documented, not implemented):** If Vercel forcefully terminates a handler mid-cleanup, a `skill_runs` row could be left as `status='running'` permanently, blocking the active-run lock until manually resolved. Mitigation: a stale-run cleanup job or periodic background function that marks rows older than 10 minutes as `status='stale'`. Low priority for internal use.
+
+---
+
 ### 2026-03-14 — Six-Phase Intelligence Sprint (commits 4716e17 → d9a00ab)
 
 **Goal:** Make vertical context actively drive runtime behavior (not just logging), fix a metrics denominator bug, close the learnings read-back gap, add API rate limiting, and replace static LinkedIn templates with OpenAI-generated dynamic variants.
@@ -558,4 +602,6 @@ context/verticals/cloud-software-delivery/
 9. **`useCampaignSkillRunner` deduplication (U3)** — Still a manual copy of `useSkillRunner` + `runningSkill` state; extract to shared parameterised hook
 10. **`xlsx` package (U6)** — `xlsx@0.18.5` has known CVEs and is abandoned; replace with `exceljs`
 11. **Verify Apollo `num_sent_emails` field at runtime** — fallback chain `num_sent_emails ?? emails_sent_count ?? num_contacts` is best-supported from code inspection; confirm with a live campaign that the correct delivery volume is returned
-12. **Upstash Redis setup for production rate limiting** — `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` must be added to Vercel environment variables; rate limiting is a graceful no-op until then
+12. ~~**Upstash Redis setup for production rate limiting**~~ ✅ REPLACED — Supabase-backed rate limiting implemented; apply migration 008 in Supabase SQL editor to activate
+13. **Apply migration 008 in Supabase SQL editor** — `supabase/migrations/008_rate_limiting.sql` creates `rate_limit_buckets` table and `increment_rate_limit` function; rate limiting is inactive until this is applied
+14. **Stale-run lock cleanup** — if Vercel terminates a handler mid-flight, a `skill_runs` row can be stuck as `status='running'` permanently, blocking active-run lock; add a periodic cleanup job or Supabase Edge Function cron to mark rows older than 10 minutes as `status='stale'`
