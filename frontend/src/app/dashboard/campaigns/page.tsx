@@ -27,7 +27,7 @@ type Campaign = {
   strategy: Record<string, string> | null;
   created_at: string;
   campaign_metrics: CampaignMetric[];
-  offers: { slug: string } | null;
+  offers: { slug: string; verticals: { name: string; slug: string } | null } | null;
   verticals: { name: string; slug: string } | null;
 };
 
@@ -74,7 +74,7 @@ export default function CampaignsPage() {
     const supabase = createClient();
     supabase
       .from("campaigns")
-      .select("*, campaign_metrics(*), offers(slug), verticals(name, slug)")
+      .select("*, campaign_metrics(*), offers(slug, verticals(name, slug)), verticals(name, slug)")
       .order("created_at", { ascending: false })
       .then(({ data }: { data: Campaign[] | null }) => {
         if (data) setCampaigns(data as Campaign[]);
@@ -243,13 +243,18 @@ export default function CampaignsPage() {
                       </span>
                     </td>
                     <td className="px-5 py-4">
-                      {c.verticals?.name ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 whitespace-nowrap">
-                          {c.verticals.name}
-                        </span>
-                      ) : (
-                        <span className="text-neutral-600">—</span>
-                      )}
+                      {(() => {
+                        const displayVertical = c.verticals?.name ?? c.offers?.verticals?.name ?? null;
+                        const isInherited = !c.verticals?.name && !!c.offers?.verticals?.name;
+                        return displayVertical ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 whitespace-nowrap">
+                            {displayVertical}
+                            {isInherited && <span className="text-indigo-400/50">(offer)</span>}
+                          </span>
+                        ) : (
+                          <span className="text-neutral-600">—</span>
+                        );
+                      })()}
                     </td>
                     <td className="px-5 py-4">
                       {href && (

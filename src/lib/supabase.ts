@@ -19,6 +19,7 @@ export interface Offer {
   icp_summary: string | null;
   buyer_summary: string | null;
   positioning: Record<string, unknown>;
+  default_vertical_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -89,6 +90,7 @@ export interface Campaign {
   status: string | null;
   strategy: Record<string, unknown> | null;
   strategy_summary: string | null;
+  vertical_id: string | null;
   created_at: string;
   updated_at: string;
 }

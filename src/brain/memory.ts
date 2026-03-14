@@ -103,25 +103,35 @@ Mention solutions before they ask.
 
 /**
  * Get what-works.md content from file system
- * This is the markdown-based learning file that Skill 6 appends to
+ * This is the markdown-based learning file that Skill 6 appends to.
+ * When a verticalSlug is provided, also reads the vertical-specific
+ * learnings file and merges them (global base first, vertical appendix second).
  */
-export async function getWhatWorks(): Promise<string> {
+export async function getWhatWorks(verticalSlug?: string | null): Promise<string> {
   try {
-    const filePath = path.join(process.cwd(), 'context', 'learnings', 'what-works.md');
+    const parts: string[] = [];
 
-    if (!fs.existsSync(filePath)) {
-      return '';
+    // Global learnings (always)
+    const globalPath = path.join(process.cwd(), 'context', 'learnings', 'what-works.md');
+    if (fs.existsSync(globalPath)) {
+      const content = fs.readFileSync(globalPath, 'utf-8');
+      const lines = content.split('\n');
+      const recentLines = lines.slice(Math.max(0, lines.length - 30)).join('\n');
+      parts.push(`RECENT CAMPAIGN LEARNINGS (what-works.md):\n${recentLines}`);
     }
 
-    const content = fs.readFileSync(filePath, 'utf-8');
-    // Return only the last section (most recent learnings) to save tokens
-    const lines = content.split('\n');
-    const recentLines = lines.slice(Math.max(0, lines.length - 30)).join('\n');
+    // Vertical-specific learnings (if active)
+    if (verticalSlug) {
+      const verticalPath = path.join(process.cwd(), 'context', 'verticals', verticalSlug, 'learnings', 'what-works.md');
+      if (fs.existsSync(verticalPath)) {
+        const vContent = fs.readFileSync(verticalPath, 'utf-8');
+        const vLines = vContent.split('\n');
+        const recentVLines = vLines.slice(Math.max(0, vLines.length - 20)).join('\n');
+        parts.push(`VERTICAL LEARNINGS (${verticalSlug}):\n${recentVLines}`);
+      }
+    }
 
-    return `
-RECENT CAMPAIGN LEARNINGS (what-works.md):
-${recentLines}
-`;
+    return parts.length > 0 ? '\n' + parts.join('\n\n') + '\n' : '';
   } catch (error) {
     console.warn('⚠️  Error reading what-works.md:', error);
     return '';

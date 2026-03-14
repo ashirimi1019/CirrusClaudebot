@@ -34,6 +34,7 @@ export interface DraftGenerationInput {
   signal?: string;
   evidenceTitle?: string;
   jobUrl?: string;
+  additionalContext?: string;
 }
 
 export interface GeneratedDraft {
@@ -144,6 +145,8 @@ async function buildPrompt(input: DraftGenerationInput): Promise<string> {
 ${emailPrinciples}
 
 ${dynamicContext ? `---\n\n${dynamicContext}\n\n---` : ''}
+
+${input.additionalContext ? `--- VERTICAL CONTEXT ---\n${input.additionalContext}\n---` : ''}
 
 Now generate an outreach email for:
 - Company: ${companyName}
@@ -373,7 +376,7 @@ export async function generateSegmentVariants(
     dominant_buyer_titles: string[];
     sample_signals: string[];
   },
-  contextFiles?: { emailPrinciples?: string; useCaseGuide?: string }
+  contextFiles?: { emailPrinciples?: string; useCaseGuide?: string; additionalContext?: string }
 ): Promise<SegmentVariant[]> {
   const emailPrinciples = contextFiles?.emailPrinciples || loadContextFile('context/copywriting/email-principles.md');
   const useCaseGuide = contextFiles?.useCaseGuide || loadContextFile('context/principles/use-case-driven.md');
@@ -405,7 +408,8 @@ Write emails that convert. Follow the principles below exactly. Never use generi
 ${emailPrinciples}
 
 ${useCaseGuide ? `\n--- USE CASE GUIDE ---\n${useCaseGuide}\n---` : ''}
-${dynamicContext ? `\n--- LEARNINGS FROM PAST CAMPAIGNS ---\n${dynamicContext}\n---` : ''}`;
+${dynamicContext ? `\n--- LEARNINGS FROM PAST CAMPAIGNS ---\n${dynamicContext}\n---` : ''}
+${contextFiles?.additionalContext ? `\n--- VERTICAL CONTEXT ---\n${contextFiles.additionalContext}\n---` : ''}`;
 
   const userPrompt = `Generate 3 email variants for the following segment:
 

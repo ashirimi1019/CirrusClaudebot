@@ -21,6 +21,8 @@ import { upsertContact } from '../../lib/db/contacts.ts';
 import { scoreCompany, ICP_THRESHOLD } from '../../lib/services/scoring.ts';
 import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
 import { validateSkillInputs } from '../../lib/services/validation.ts';
+import { buildSkillContext } from '../../lib/verticals/index.ts';
+import { getSupabaseClient } from '../../lib/supabase.ts';
 import readline from 'readline';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -86,6 +88,7 @@ function parseStrategy(strategy: string): { roles: string[]; geography: string[]
 export async function runSkill4FindLeads(): Promise<void> {
   const tracker = new SkillRunTracker('SKILL 4: FIND LEADS (via Apollo.io)');
   tracker.step('Validate inputs');
+  tracker.step('Load vertical context');
   tracker.step('Search companies (Apollo)');
   tracker.step('Score against ICP');
   tracker.step('Find decision-makers');
@@ -132,6 +135,45 @@ export async function runSkill4FindLeads(): Promise<void> {
   const strategy = readFile(strategyPath);
   const { roles, geography } = parseStrategy(strategy);
   tracker.completeStep('Validate inputs', `${roles.length} roles, geography: ${geography.join(', ')}`);
+
+  // ─── Step 1b: Load vertical context (if configured) ───
+  tracker.startStep('Load vertical context');
+  let verticalContext = '';
+  try {
+    const sb = getSupabaseClient();
+    const { data: offerRow } = await sb
+      .from('offers')
+      .select('id')
+      .eq('slug', offerSlug)
+      .single();
+
+    if (offerRow?.id) {
+      const { data: campaignRow } = await sb
+        .from('campaigns')
+        .select('id')
+        .eq('offer_id', offerRow.id)
+        .eq('slug', campaignSlug)
+        .single();
+
+      const verticalCtx = await buildSkillContext('skill-4', offerRow.id, campaignRow?.id);
+      if (verticalCtx.effectiveVertical) {
+        verticalContext = verticalCtx.context;
+        tracker.completeStep(
+          'Load vertical context',
+          `vertical="${verticalCtx.effectiveVerticalName}", sections=[${verticalCtx.loadedSections.join(', ')}]`
+        );
+      } else {
+        tracker.completeStep('Load vertical context', 'No vertical configured — using base ICP/scoring');
+      }
+    } else {
+      tracker.completeStep('Load vertical context', 'Skipped — offer not found in DB');
+    }
+  } catch (err) {
+    tracker.partialStep(
+      'Load vertical context',
+      `Warning: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 
   // Create leads directory
   const leadsDir = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlug, 'leads');
@@ -324,6 +366,13 @@ export async function runSkill4FindLeads(): Promise<void> {
   const csv = [header, ...rows].join('\n');
   const allLeadsPath = path.join(leadsDir, 'all_leads.csv');
   fs.writeFileSync(allLeadsPath, csv);
+
+  // If vertical context was loaded, write it as reference alongside leads
+  if (verticalContext) {
+    const verticalRefPath = path.join(leadsDir, 'vertical-context.md');
+    fs.writeFileSync(verticalRefPath, verticalContext);
+  }
+
   tracker.completeStep('Write all_leads.csv', `${rows.length} rows → ${allLeadsPath}`, rows.length);
 
   tracker.printSummary();

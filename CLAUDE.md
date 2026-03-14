@@ -6,6 +6,21 @@
 
 ---
 
+## primer.md — Required Reading
+
+> **`primer.md` is the living memory of this project.** It is the primary continuity and project-state reference.
+
+**Rules for every Claude Code session:**
+1. **Read `primer.md` before making any changes** — it contains the latest architecture decisions, vertical design status, known limitations, and change history
+2. **Update `primer.md` after every change** — no change is too small. Every modification to code, schema, config, UI, prompts, or logic must be reflected there
+3. **Keep it current** — if implementation decisions change, update `primer.md` accordingly
+4. **Implementation must stay aligned** with the latest decisions recorded in `primer.md`
+5. **The change log section** must be updated with: what changed, why, and affected files
+
+`primer.md` supersedes stale information elsewhere. If there is a conflict between `primer.md` and other docs, `primer.md` is authoritative for current project state.
+
+---
+
 ## System Overview
 
 This is a **signal-driven outbound campaign automation system** for CirrusLabs's staffing business.
@@ -218,6 +233,10 @@ CirrusLabs/
 │   ├── api-guides/                   (apollo-capabilities, apollo-api, openai-api, supabase)
 │   └── learnings/
 │       └── what-works.md             ← Grows with each campaign
+│   └── verticals/                       ← Per-vertical playbook directories
+│       ├── staffing/                    (8 .md playbook files each)
+│       ├── ai-data-consulting/
+│       └── cloud-software-delivery/
 │
 ├── offers/                           ← Per-offer + per-campaign data
 │   └── {offer-slug}/
@@ -252,6 +271,12 @@ CirrusLabs/
 │   │   │   ├── campaign-metrics.ts   ← Rate computation
 │   │   │   ├── csv-export.ts         ← CSV building
 │   │   │   └── logging.ts            ← Console + DB logging
+│   │   ├── verticals/                   ← Vertical playbook system
+│   │   │   ├── types.ts              ← Playbook interface, field/skill mappings
+│   │   │   ├── loader.ts             ← Reads .md files from context/verticals/{slug}/
+│   │   │   ├── resolver.ts           ← getEffectiveVertical(offerId, campaignId?)
+│   │   │   ├── context-builder.ts    ← buildSkillContext(skillId, offerId, campaignId?)
+│   │   │   └── index.ts              ← Barrel exports
 │   │   └── supabase.ts               ← Client + TypeScript types
 │   │
 │   ├── types/                        ← Shared TypeScript interfaces
@@ -531,7 +556,15 @@ Let's go.
 
 ---
 
-## Recent Changes (March 11-12, 2026)
+## Recent Changes (March 11-13, 2026)
+
+### Vertical Architecture (March 13)
+- Full vertical agent architecture implemented — 3 verticals (staffing, ai-data-consulting, cloud-software-delivery)
+- `src/lib/verticals/` module: types, loader, resolver, context-builder (centralized `buildSkillContext()`)
+- All 6 skills integrated via `buildSkillContext(skillId, offerId, campaignId?)`
+- Per-vertical learnings: Skill 6 writes to both global + vertical-specific `what-works.md`; `memory.ts` reads both
+- DB migration `006_verticals.sql`: verticals table, FK columns on offers + campaigns
+- Remaining: vertical playbook content authoring (24 .md files), UI vertical selector (Section 4)
 
 ### Production-Readiness Hardening
 - All 6 skills: added input validation, error recovery, graceful degradation

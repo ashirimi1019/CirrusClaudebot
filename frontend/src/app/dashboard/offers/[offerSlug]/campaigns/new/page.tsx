@@ -103,7 +103,8 @@ export default function NewCampaignPage() {
           const name = data?.verticals?.name;
           if (name) setOfferVerticalName(name);
         }
-      });
+      })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, [offerSlug]);
 

@@ -52,6 +52,7 @@ import {
 } from '../../lib/services/intelligence.ts';
 import { generateAllSegmentVariants } from '../../lib/services/segment-copy.ts';
 import { getSupabaseClient } from '../../lib/supabase.ts';
+import { buildSkillContext } from '../../lib/verticals/index.ts';
 import type {
   LeadRow,
   SegmentGroup,
@@ -363,6 +364,7 @@ export async function runSkill5LaunchOutreach(
   // Register all steps up front
   tracker.step('Validate inputs');
   tracker.step('Load contacts & context');
+  tracker.step('Load vertical context');
   if (!skipIntelligence) {
     tracker.step('Classify companies');
     tracker.step('Apply low-confidence handling');
@@ -420,6 +422,45 @@ export async function runSkill5LaunchOutreach(
     validation.warnings.forEach((w) => tracker.warn(w));
   }
   tracker.completeStep('Validate inputs', `offer="${offerSlug}", campaign="${campaignSlug}"`);
+
+  // ─── Step 1b: Load vertical context (if configured) ───
+  tracker.startStep('Load vertical context');
+  let verticalContext = '';
+  try {
+    const sb = getSupabaseClient();
+    const { data: offerRow } = await sb
+      .from('offers')
+      .select('id')
+      .eq('slug', offerSlug)
+      .single();
+
+    if (offerRow?.id) {
+      const { data: campaignRow } = await sb
+        .from('campaigns')
+        .select('id')
+        .eq('offer_id', offerRow.id)
+        .eq('slug', campaignSlug)
+        .single();
+
+      const verticalCtx = await buildSkillContext('skill-5', offerRow.id, campaignRow?.id);
+      if (verticalCtx.effectiveVertical) {
+        verticalContext = verticalCtx.context;
+        tracker.completeStep(
+          'Load vertical context',
+          `vertical="${verticalCtx.effectiveVerticalName}", sections=[${verticalCtx.loadedSections.join(', ')}]`
+        );
+      } else {
+        tracker.completeStep('Load vertical context', 'No vertical configured — using base messaging');
+      }
+    } else {
+      tracker.completeStep('Load vertical context', 'Skipped — offer not found in DB');
+    }
+  } catch (err) {
+    tracker.partialStep(
+      'Load vertical context',
+      `Warning: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 
   try {
     // Paths
@@ -534,7 +575,7 @@ export async function runSkill5LaunchOutreach(
 
     // ─── Step 8: Generate per-segment email variants ───
     tracker.startStep('Generate segment variants');
-    segments = await generateAllSegmentVariants(segments);
+    segments = await generateAllSegmentVariants(segments, undefined, verticalContext || undefined);
     const totalVariants = segments.reduce((sum, s) => sum + (s.variants?.length || 0), 0);
     tracker.completeStep('Generate segment variants', `${totalVariants} variants across ${segments.length} segments`, totalVariants);
 

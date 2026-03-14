@@ -12,6 +12,7 @@ import { generateDraft } from '../../lib/clients/openai.ts';
 import { getSupabaseClient } from '../../lib/supabase.ts';
 import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
 import { validateSkillInputs } from '../../lib/services/validation.ts';
+import { buildSkillContext } from '../../lib/verticals/index.ts';
 import readline from 'readline';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -42,6 +43,7 @@ function readFile(filePath: string): string {
 export async function runSkill3CampaignCopy(): Promise<void> {
   const tracker = new SkillRunTracker('SKILL 3: CAMPAIGN COPY GENERATION');
   tracker.step('Validate inputs');
+  tracker.step('Load vertical context');
   tracker.step('Generate email variants');
   tracker.step('Generate LinkedIn variants');
   tracker.step('Write copy files');
@@ -81,6 +83,28 @@ export async function runSkill3CampaignCopy(): Promise<void> {
   }
   tracker.completeStep('Validate inputs', `offer="${offerSlug}", campaign="${campaignSlug}"`);
 
+  // ─── Step 1b: Load vertical context ───
+  tracker.startStep('Load vertical context');
+  let verticalContext = '';
+  try {
+    const sb = getSupabaseClient();
+    const { data: offerRow } = await sb.from('offers').select('id').eq('slug', offerSlug).single();
+    if (offerRow?.id) {
+      const { data: campaignRow } = await sb.from('campaigns').select('id').eq('offer_id', offerRow.id).eq('slug', campaignSlug).single();
+      const verticalCtx = await buildSkillContext('skill-3', offerRow.id, campaignRow?.id);
+      if (verticalCtx.effectiveVertical) {
+        verticalContext = verticalCtx.context;
+        tracker.completeStep('Load vertical context', `vertical="${verticalCtx.effectiveVertical}", sections=[${verticalCtx.loadedSections.join(', ')}]`);
+      } else {
+        tracker.completeStep('Load vertical context', 'No vertical configured');
+      }
+    } else {
+      tracker.completeStep('Load vertical context', 'Skipped — offer not found in DB');
+    }
+  } catch (err) {
+    tracker.partialStep('Load vertical context', `Warning: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   // Read positioning and strategy
   const positioningPath = path.join(process.cwd(), 'offers', offerSlug, 'positioning.md');
   const strategyPath = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlug, 'strategy.md');
@@ -107,6 +131,7 @@ export async function runSkill3CampaignCopy(): Promise<void> {
         buyerTitle: '[Title]',
         evidenceTitle: extractSignalFromStrategy(strategy),
         jobUrl: undefined,
+        additionalContext: verticalContext,
       });
       emailVariants.push({ name: `email-variant-${i}`, subject: draft.subject, body: draft.body });
       console.log(`  ✅ Email variant ${i} generated (angle: ${angle})`);

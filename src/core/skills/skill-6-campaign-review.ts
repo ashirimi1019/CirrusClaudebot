@@ -17,6 +17,8 @@ import {
 } from '../../lib/clients/apollo.ts';
 import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
 import { validateSkillInputs } from '../../lib/services/validation.ts';
+import { buildSkillContext } from '../../lib/verticals/index.ts';
+import { getSupabaseClient } from '../../lib/supabase.ts';
 import readline from 'readline';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -48,6 +50,7 @@ export async function runSkill6CampaignReview(
 ): Promise<void> {
   const tracker = new SkillRunTracker('SKILL 6: CAMPAIGN REVIEW (Apollo Analytics)');
   tracker.step('Validate inputs');
+  tracker.step('Load vertical context');
   tracker.step('Resolve Apollo sequence');
   tracker.step('Pull metrics from Apollo');
   tracker.step('Gather qualitative inputs');
@@ -91,6 +94,47 @@ export async function runSkill6CampaignReview(
       validation.warnings.forEach((w) => tracker.warn(w));
     }
     tracker.completeStep('Validate inputs', `offer="${offerSlug}", campaign="${campaignSlug}"`);
+
+    // ─── Step 1b: Load vertical context (if configured) ───
+    tracker.startStep('Load vertical context');
+    let verticalContext = '';
+    let effectiveVerticalSlug: string | null = null;
+    try {
+      const sb = getSupabaseClient();
+      const { data: offerRow } = await sb
+        .from('offers')
+        .select('id')
+        .eq('slug', offerSlug)
+        .single();
+
+      if (offerRow?.id) {
+        const { data: campaignRow } = await sb
+          .from('campaigns')
+          .select('id')
+          .eq('offer_id', offerRow.id)
+          .eq('slug', campaignSlug)
+          .single();
+
+        const verticalCtx = await buildSkillContext('skill-6', offerRow.id, campaignRow?.id);
+        if (verticalCtx.effectiveVertical) {
+          verticalContext = verticalCtx.context;
+          effectiveVerticalSlug = verticalCtx.effectiveVertical;
+          tracker.completeStep(
+            'Load vertical context',
+            `vertical="${verticalCtx.effectiveVerticalName}", sections=[${verticalCtx.loadedSections.join(', ')}]`
+          );
+        } else {
+          tracker.completeStep('Load vertical context', 'No vertical configured — using base review');
+        }
+      } else {
+        tracker.completeStep('Load vertical context', 'Skipped — offer not found in DB');
+      }
+    } catch (err) {
+      tracker.partialStep(
+        'Load vertical context',
+        `Warning: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
 
     // ─── Step 2: Resolve Apollo sequence ───
     tracker.startStep('Resolve Apollo sequence');
@@ -326,7 +370,13 @@ ${mistakes}
 2. **Avoid:** ${worstVariant}
 3. **Prioritize buyer title:** ${bestTitle}
 4. **Pre-empt objections:** ${objections}
+${verticalContext ? `
+---
 
+## Vertical Context
+
+${verticalContext}
+` : ''}
 ---
 
 Generated: ${new Date().toISOString()}
@@ -357,6 +407,20 @@ Generated: ${new Date().toISOString()}
 
       fs.writeFileSync(whatWorksPath, existing + update);
       tracker.completeStep('Update what-works.md', whatWorksPath);
+
+      // Also write to per-vertical learnings if a vertical is active
+      if (effectiveVerticalSlug) {
+        try {
+          const verticalLearningsDir = path.join(process.cwd(), 'context', 'verticals', effectiveVerticalSlug, 'learnings');
+          fs.mkdirSync(verticalLearningsDir, { recursive: true });
+          const verticalWhatWorksPath = path.join(verticalLearningsDir, 'what-works.md');
+          const existingVertical = fs.existsSync(verticalWhatWorksPath) ? fs.readFileSync(verticalWhatWorksPath, 'utf-8') : `# What Works — ${effectiveVerticalSlug}\n\nVertical-specific campaign learnings.\n`;
+          fs.writeFileSync(verticalWhatWorksPath, existingVertical + update);
+          console.log(`  📁 Also updated vertical learnings: ${verticalWhatWorksPath}`);
+        } catch (vertErr: any) {
+          tracker.warn(`Per-vertical learnings write failed: ${vertErr.message}`);
+        }
+      }
     } catch (wwErr: any) {
       tracker.partialStep('Update what-works.md', `Failed to update: ${wwErr.message}. Learnings.md was saved.`);
       tracker.warn(`what-works.md update failed: ${wwErr.message}. Ensure context/learnings/ directory exists.`);
@@ -368,6 +432,9 @@ Generated: ${new Date().toISOString()}
     console.log(`  Meetings:     ${meetings}`);
     console.log(`  Deals closed: ${closed}`);
     console.log('\n💡 Learnings added to context/learnings/what-works.md');
+    if (effectiveVerticalSlug) {
+      console.log(`📁 Vertical learnings: context/verticals/${effectiveVerticalSlug}/learnings/what-works.md`);
+    }
     console.log('🔄 Flywheel complete! Next campaign will be smarter.');
   } catch (err: any) {
     if (rl) rl.close();
