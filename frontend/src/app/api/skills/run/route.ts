@@ -249,7 +249,8 @@ export async function GET(request: NextRequest) {
   // Resolve offer/campaign IDs early for active-run lock
   const { offerId: earlyOfferId, campaignId: earlyCampaignId } = await resolveIds(offer, campaign);
 
-  // Active-run lock — block duplicate concurrent runs for same campaign/offer
+  // Active-run lock — block duplicate concurrent runs; auto-clear stale locks
+  const STALE_LOCK_MS = 10 * 60 * 1000; // 10 minutes (2× Vercel maxDuration)
   {
     const lockField = earlyCampaignId ? 'campaign_id' : (earlyOfferId ? 'offer_id' : null);
     const lockValue = earlyCampaignId ?? earlyOfferId;
@@ -262,17 +263,44 @@ export async function GET(request: NextRequest) {
         .limit(1);
       if (runningRows && runningRows.length > 0) {
         const running = runningRows[0] as { id: string; skill_number: number; started_at: string };
-        return new Response(
-          JSON.stringify({
-            error: 'A skill is already running for this campaign. Please wait for it to complete.',
-            runningSkill: running.skill_number,
-            startedAt: running.started_at,
-          }),
-          {
-            status: 409,
-            headers: { 'Content-Type': 'application/json' },
-          },
-        );
+        const ageMs = Date.now() - new Date(running.started_at).getTime();
+        if (ageMs > STALE_LOCK_MS) {
+          // Stale lock — prior run exceeded threshold without finalising; auto-close it
+          console.warn(
+            `[active-run-lock] Stale running row detected: id=${running.id} skill=${running.skill_number} ` +
+            `age=${Math.round(ageMs / 1000)}s > threshold=${STALE_LOCK_MS / 1000}s — marking failed`,
+          );
+          try {
+            await adminDb
+              .from('skill_runs')
+              .update({
+                status: 'failed',
+                finished_at: new Date().toISOString(),
+                log_lines: ['[stale-lock cleanup] Prior run exceeded stale threshold and was auto-closed'],
+              })
+              .eq('id', running.id);
+          } catch {
+            /* Non-fatal — proceed to allow new run regardless */
+          }
+          console.log(`[active-run-lock] Stale lock cleared; allowing new run for ${lockField}=${lockValue}`);
+        } else {
+          // Fresh running row — block the request
+          console.log(
+            `[active-run-lock] Active run found: id=${running.id} skill=${running.skill_number} ` +
+            `age=${Math.round(ageMs / 1000)}s — returning 409`,
+          );
+          return new Response(
+            JSON.stringify({
+              error: 'A skill is already running for this campaign. Please wait for it to complete.',
+              runningSkill: running.skill_number,
+              startedAt: running.started_at,
+            }),
+            {
+              status: 409,
+              headers: { 'Content-Type': 'application/json' },
+            },
+          );
+        }
       }
     }
   }
