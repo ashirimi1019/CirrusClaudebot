@@ -16,7 +16,7 @@ import { NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createServerClient } from '@supabase/ssr';
 import { ConsoleCapture } from '@/lib/console-capture';
-import { skillRunLimiter } from '@/lib/rate-limit';
+import { checkSkillRunRateLimit } from '@/lib/rate-limit';
 import {
   withWriteDir,
   ensureContextFiles,
@@ -226,23 +226,54 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  // Rate limiting
-  if (skillRunLimiter) {
+  // Rate limiting — 20 requests/hour per user (IP fallback)
+  {
     const ip =
       request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
       request.headers.get('x-real-ip') ??
       '127.0.0.1';
-    const { success, limit, remaining, reset } = await skillRunLimiter.limit(ip);
-    if (!success) {
+    const rl = await checkSkillRunRateLimit(adminDb, userId, ip);
+    if (!rl.allowed) {
       return new Response(JSON.stringify({ error: 'Rate limit exceeded. Try again later.' }), {
         status: 429,
         headers: {
           'Content-Type': 'application/json',
-          'X-RateLimit-Limit': String(limit),
-          'X-RateLimit-Remaining': String(remaining),
-          'X-RateLimit-Reset': String(reset),
+          'X-RateLimit-Limit': String(rl.limit),
+          'X-RateLimit-Remaining': String(Math.max(0, rl.limit - rl.count)),
+          'X-RateLimit-Reset': String(Math.floor(rl.resetAt.getTime() / 1000)),
         },
       });
+    }
+  }
+
+  // Resolve offer/campaign IDs early for active-run lock
+  const { offerId: earlyOfferId, campaignId: earlyCampaignId } = await resolveIds(offer, campaign);
+
+  // Active-run lock — block duplicate concurrent runs for same campaign/offer
+  {
+    const lockField = earlyCampaignId ? 'campaign_id' : (earlyOfferId ? 'offer_id' : null);
+    const lockValue = earlyCampaignId ?? earlyOfferId;
+    if (lockField && lockValue) {
+      const { data: runningRows } = await adminDb
+        .from('skill_runs')
+        .select('id, skill_number, started_at')
+        .eq('status', 'running')
+        .eq(lockField, lockValue)
+        .limit(1);
+      if (runningRows && runningRows.length > 0) {
+        const running = runningRows[0] as { id: string; skill_number: number; started_at: string };
+        return new Response(
+          JSON.stringify({
+            error: 'A skill is already running for this campaign. Please wait for it to complete.',
+            runningSkill: running.skill_number,
+            startedAt: running.started_at,
+          }),
+          {
+            status: 409,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        );
+      }
     }
   }
 
@@ -280,8 +311,9 @@ export async function GET(request: NextRequest) {
       const sb = adminDb;
       const startedAt = Date.now();
 
-      // Resolve offer/campaign IDs for foreign keys
-      const { offerId, campaignId } = await resolveIds(offer, campaign);
+      // Resolve offer/campaign IDs for foreign keys (resolved early for active-run lock)
+      const offerId = earlyOfferId;
+      const campaignId = earlyCampaignId;
 
       // Insert a "running" row so the UI can see the run started
       let runId: string | null = null;
