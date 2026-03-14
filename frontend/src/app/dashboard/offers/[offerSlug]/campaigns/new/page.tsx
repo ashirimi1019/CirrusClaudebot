@@ -1,11 +1,13 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, ChevronDown, ChevronUp } from 'lucide-react';
 import { LogPanel } from '@/components/ui/log-panel';
 import { useSkillRunner } from '@/lib/useSkillRunner';
+import { VerticalSelect } from '@/components/VerticalSelect';
+import { createClient } from '@/lib/supabase';
 
 interface CampaignForm {
   campaignName: string;
@@ -20,6 +22,7 @@ interface CampaignForm {
   buyerFilters: string;
   expectedVolume: string;
   expectedFit: string;
+  vertical_id: string;
 }
 
 const DEFAULTS: CampaignForm = {
@@ -35,6 +38,7 @@ const DEFAULTS: CampaignForm = {
   buyerFilters: 'CTO, VP Engineering, Founder',
   expectedVolume: '20-30 companies per search',
   expectedFit: '60% will match ICP',
+  vertical_id: '',
 };
 
 function Field({
@@ -83,6 +87,25 @@ export default function NewCampaignPage() {
   const router = useRouter();
   const [form, setForm] = useState<CampaignForm>(DEFAULTS);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [offerVerticalName, setOfferVerticalName] = useState<string>('');
+
+  useEffect(() => {
+    if (!offerSlug) return;
+    let cancelled = false;
+    const supabase = createClient();
+    supabase
+      .from('offers')
+      .select('default_vertical_id, verticals(name)')
+      .eq('slug', offerSlug)
+      .single()
+      .then(({ data }: { data: { default_vertical_id: string | null; verticals: { name: string } | null } | null }) => {
+        if (!cancelled) {
+          const name = data?.verticals?.name;
+          if (name) setOfferVerticalName(name);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [offerSlug]);
 
   const handleChange = useCallback((field: keyof CampaignForm, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -237,6 +260,23 @@ export default function NewCampaignPage() {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Vertical override */}
+        <div className="p-4 bg-neutral-900 border border-neutral-800 rounded-xl">
+          <label className="block text-xs font-medium text-gray-400 mb-1.5">
+            Vertical Override
+          </label>
+          <VerticalSelect
+            value={form.vertical_id}
+            onChange={(v) => setForm((f) => ({ ...f, vertical_id: v }))}
+            showInherit={true}
+          />
+          <p className="text-xs text-neutral-500 mt-1">
+            {offerVerticalName
+              ? `Inheriting from offer: ${offerVerticalName}`
+              : 'Leave blank to inherit the vertical from the offer.'}
+          </p>
         </div>
 
         {/* Submit */}
