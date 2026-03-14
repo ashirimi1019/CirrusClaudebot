@@ -16,6 +16,7 @@ import { NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createServerClient } from '@supabase/ssr';
 import { ConsoleCapture } from '@/lib/console-capture';
+import { skillRunLimiter } from '@/lib/rate-limit';
 import {
   withWriteDir,
   ensureContextFiles,
@@ -223,6 +224,26 @@ export async function GET(request: NextRequest) {
       status: 401,
       headers: { 'Content-Type': 'application/json' },
     });
+  }
+
+  // Rate limiting
+  if (skillRunLimiter) {
+    const ip =
+      request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+      request.headers.get('x-real-ip') ??
+      '127.0.0.1';
+    const { success, limit, remaining, reset } = await skillRunLimiter.limit(ip);
+    if (!success) {
+      return new Response(JSON.stringify({ error: 'Rate limit exceeded. Try again later.' }), {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-RateLimit-Limit': String(limit),
+          'X-RateLimit-Remaining': String(remaining),
+          'X-RateLimit-Reset': String(reset),
+        },
+      });
+    }
   }
 
   // Validate slugs to prevent path traversal / injection
