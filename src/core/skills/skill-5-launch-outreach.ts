@@ -426,6 +426,7 @@ export async function runSkill5LaunchOutreach(
   // ─── Step 1b: Load vertical context (if configured) ───
   tracker.startStep('Load vertical context');
   let verticalContext = '';
+  let effectiveVerticalSlug: string | null = null;
   try {
     const sb = getSupabaseClient();
     const { data: offerRow } = await sb
@@ -445,6 +446,7 @@ export async function runSkill5LaunchOutreach(
       const verticalCtx = await buildSkillContext('skill-5', offerRow.id, campaignRow?.id);
       if (verticalCtx.effectiveVertical) {
         verticalContext = verticalCtx.context;
+        effectiveVerticalSlug = verticalCtx.effectiveVertical ?? null;
         tracker.completeStep(
           'Load vertical context',
           `vertical="${verticalCtx.effectiveVerticalName}", sections=[${verticalCtx.loadedSections.join(', ')}]`
@@ -575,7 +577,7 @@ export async function runSkill5LaunchOutreach(
 
     // ─── Step 8: Generate per-segment email variants ───
     tracker.startStep('Generate segment variants');
-    segments = await generateAllSegmentVariants(segments, undefined, verticalContext || undefined);
+    segments = await generateAllSegmentVariants(segments, undefined, verticalContext || undefined, effectiveVerticalSlug);
     const totalVariants = segments.reduce((sum, s) => sum + (s.variants?.length || 0), 0);
     tracker.completeStep('Generate segment variants', `${totalVariants} variants across ${segments.length} segments`, totalVariants);
 

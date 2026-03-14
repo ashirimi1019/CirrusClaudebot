@@ -14,7 +14,7 @@ import type {
 import { LOW_CONFIDENCE_THRESHOLD } from '../../types/intelligence.ts';
 
 // Dynamic memory context is optional - only imported if available
-let buildDynamicContextFn: ((campaignId?: string) => Promise<string>) | null = null;
+let buildDynamicContextFn: ((campaignId?: string, verticalSlug?: string | null) => Promise<string>) | null = null;
 
 // Try to load buildDynamicContext, but don't fail if unavailable
 try {
@@ -35,6 +35,7 @@ export interface DraftGenerationInput {
   evidenceTitle?: string;
   jobUrl?: string;
   additionalContext?: string;
+  verticalSlug?: string | null;
 }
 
 export interface GeneratedDraft {
@@ -131,7 +132,7 @@ async function buildPrompt(input: DraftGenerationInput): Promise<string> {
   let dynamicContext = '';
   if (buildDynamicContextFn) {
     try {
-      dynamicContext = await buildDynamicContextFn();
+      dynamicContext = await buildDynamicContextFn(undefined, input.verticalSlug ?? null);
       if (dynamicContext.trim().length > 0) {
         console.log('✅ Injected dynamic context from previous campaigns');
       }
@@ -381,7 +382,7 @@ export async function generateSegmentVariants(
     dominant_buyer_titles: string[];
     sample_signals: string[];
   },
-  contextFiles?: { emailPrinciples?: string; useCaseGuide?: string; additionalContext?: string }
+  contextFiles?: { emailPrinciples?: string; useCaseGuide?: string; additionalContext?: string; verticalSlug?: string | null }
 ): Promise<SegmentVariant[]> {
   const emailPrinciples = contextFiles?.emailPrinciples || loadContextFile('context/copywriting/email-principles.md');
   const useCaseGuide = contextFiles?.useCaseGuide || loadContextFile('context/principles/use-case-driven.md');
@@ -390,7 +391,7 @@ export async function generateSegmentVariants(
   let dynamicContext = '';
   if (buildDynamicContextFn) {
     try {
-      dynamicContext = await buildDynamicContextFn();
+      dynamicContext = await buildDynamicContextFn(undefined, contextFiles?.verticalSlug ?? null);
     } catch { /* ignore */ }
   }
 

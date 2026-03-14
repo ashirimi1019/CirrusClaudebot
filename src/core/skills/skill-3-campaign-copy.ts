@@ -86,6 +86,7 @@ export async function runSkill3CampaignCopy(): Promise<void> {
   // ─── Step 1b: Load vertical context ───
   tracker.startStep('Load vertical context');
   let verticalContext = '';
+  let effectiveVerticalSlug: string | null = null;
   try {
     const sb = getSupabaseClient();
     const { data: offerRow } = await sb.from('offers').select('id').eq('slug', offerSlug).single();
@@ -94,6 +95,7 @@ export async function runSkill3CampaignCopy(): Promise<void> {
       const verticalCtx = await buildSkillContext('skill-3', offerRow.id, campaignRow?.id);
       if (verticalCtx.effectiveVertical) {
         verticalContext = verticalCtx.context;
+        effectiveVerticalSlug = verticalCtx.effectiveVertical ?? null;
         tracker.completeStep('Load vertical context', `vertical="${verticalCtx.effectiveVertical}", sections=[${verticalCtx.loadedSections.join(', ')}]`);
       } else {
         tracker.completeStep('Load vertical context', 'No vertical configured');
@@ -136,6 +138,7 @@ export async function runSkill3CampaignCopy(): Promise<void> {
           `Use this angle as the primary writing approach for this email variant.`,
           verticalContext,
         ].filter(Boolean).join('\n\n'),
+        verticalSlug: effectiveVerticalSlug,
       });
       emailVariants.push({ name: `email-variant-${i}`, subject: draft.subject, body: draft.body });
       console.log(`  ✅ Email variant ${i} generated (angle: ${angle})`);

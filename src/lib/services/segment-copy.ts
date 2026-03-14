@@ -15,7 +15,8 @@ import { OFFER_TYPE_LABELS, SERVICE_LINE_LABELS } from '../../types/intelligence
 export async function generateAllSegmentVariants(
   segments: SegmentGroup[],
   contextDir?: string,
-  additionalContext?: string
+  additionalContext?: string,
+  verticalSlug?: string | null
 ): Promise<SegmentGroup[]> {
   console.log(`\n  → Generating email variants for ${segments.length} segment(s)...\n`);
 
@@ -43,7 +44,7 @@ export async function generateAllSegmentVariants(
           dominant_buyer_titles: dominantTitles,
           sample_signals: sampleSignals,
         },
-        additionalContext ? { additionalContext } : undefined
+        { additionalContext: additionalContext ?? undefined, verticalSlug: verticalSlug ?? null }
       );
 
       segment.variants = variants;

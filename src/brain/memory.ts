@@ -143,13 +143,13 @@ export async function getWhatWorks(verticalSlug?: string | null): Promise<string
  * Combines: top subject lines + top objections + what-works.md
  * Closes the flywheel loop between database and LLM prompts
  */
-export async function buildDynamicContext(campaignId?: string): Promise<string> {
+export async function buildDynamicContext(campaignId?: string, verticalSlug?: string | null): Promise<string> {
   console.log('\n🧠 Building Dynamic Memory Context...');
 
   const [topSubjects, topObjections, whatWorks] = await Promise.all([
     getTopPerformingSubjectLines(5),
     getTopObjections(30, 5),
-    getWhatWorks(),
+    getWhatWorks(verticalSlug ?? undefined),
   ]);
 
   const context = [topSubjects, topObjections, whatWorks].filter((c) => c.trim().length > 0).join('\n');
