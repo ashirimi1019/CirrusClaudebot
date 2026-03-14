@@ -216,6 +216,52 @@ context/
 
 ## Change Log
 
+### 2026-03-14 — Full codebase bug fix pass (28 fixes, commit b658b95)
+
+**Source:** 5-agent code review across all codebase sections
+
+**Critical fixes (data corruption + security):**
+- `apollo.ts`: operator precedence bug fixed — `website_url` now correctly computed for all companies; `http://` → `https://`
+- `skill-4`: CSV injection fixed — replaced hand-rolled template literal CSV with `objectsToCsv()` (proper `""` escaping)
+- `skill-5`: Apollo contact ID sync now matches by email, not array position
+- `geography.ts`: `buildApolloLocationFilter` now adds `"United States"` when state filter is active
+- `geography.ts`: unknown country now passes through (not hard-rejected) when US is in allowlist
+- `api/skills/run`: returns 401 when unauthenticated — prevents credit spend
+- `api/skills/run` + `status`: slug params validated against safe pattern before `path.join()`
+
+**Campaign quality fixes:**
+- `skill-3`: `angle` variable now passed to `generateDraft()` — 3 variants get 3 different angle instructions
+- `skill-3`: `extractSignalFromStrategy` regex fixed — captures content below heading, not heading text
+- `openai.ts`: system prompt persona is now dynamic based on vertical context presence (not always "staffing")
+
+**Frontend fixes:**
+- `metricsLoading` can no longer get stuck — `.catch()` added
+- Intelligence tab: `Promise.all` wraps all 3 queries before clearing loading
+- Campaign detail: cancellation guard added to nested offer/campaign fetch
+- Campaigns list: `deriveStatus` uses most recent metrics (sorted DESC)
+- `useSkillRunner` + `useCampaignSkillRunner`: `EventSource` closed on unmount
+- `vercel-paths.ts`: `contextCopied` race replaced with Promise singleton
+- All API routes: Supabase service client is now a module-level singleton
+
+**Type safety:**
+- `supabase.ts`: `Offer` + `Campaign` interfaces now include `allowed_countries`/`allowed_us_states`
+- `supabase.ts`: `country: string | null` (was non-nullable)
+- `supabase.ts`: `CampaignCompany.offer_type`/`service_line` now proper union types
+- `types/company.ts` + `scoring.ts`: `revenue_score` added to `IcpScore` and return value
+
+**Config/cleanup:**
+- `package.json`: removed dead `googleapis` dependency + `sheets:sync` script
+- `.env.example`: added `NEXT_PUBLIC_*` variants (what frontend routes actually read)
+- `scoring.md`: fixed broken backtick refs in ai-data + cloud-software-delivery verticals
+- `icp-framework.md`: added note clarifying vertical icp.md overrides geography
+- `src/lib/db/utils.ts`: new file — `isTransientDbError` extracted from 3 duplicate locations
+- `apollo.ts`: `per_page` string literals → integers
+
+**Files changed:** 28 files + 1 new (`src/lib/db/utils.ts`)
+**Frontend TypeScript:** 0 errors after all changes
+
+---
+
 ### 2026-03-14 — Geography filtering added to Skill 4
 
 **What:** Geography enforcement system for Skill 4 (Find Leads).
@@ -462,5 +508,10 @@ context/verticals/cloud-software-delivery/
 1. **Run end-to-end demo with a vertical-aware offer** — Section 4 UI is complete; validate the full resolution chain in production: create offer with staffing vertical → create campaign → confirm `EffectiveVerticalBadge` shows "(offer)" → add campaign override → confirm badge updates to "(override)"
 2. **Geography UI** — Add `allowed_countries` / `allowed_us_states` config fields to offer/campaign create forms so operators can set geography scope from the dashboard (migration 007 applied; backend fully wired; frontend UI not yet built)
 3. **Make scoring vertical-configurable** — `scoring.ts` currently hardcoded; vertical `scoring.md` should influence ICP scoring weights
-4. **Skills 4 & 5: actively consume vertical context** — Both load context via `buildSkillContext()` but currently only log/display it; could use vertical ICP/signals/scoring to influence company filtering and sequence strategy
-5. **Run live skill execution with vertical** — "Talent As A Service - US" now has `default_vertical_id = staffing`; run Skills 1-6 via dashboard or CLI to verify context appears in outputs
+4. **Skills 4 & 5: actively consume vertical context (Q3, Q4)** — Skill 4 role list still uses 10 default engineering roles regardless of vertical; Skill 5 `classifyCompanyBatch()` uses hardcoded staffing service-line options for all verticals
+5. **LinkedIn variants (Q5)** — Still static template strings; `generateDraft()` not called; `positioning` and `strategy` args not used
+6. **Per-vertical learnings read-back (Q7)** — Skill 6 writes to `context/verticals/{slug}/learnings/what-works.md` but no skill reads it back; add `learnings` field to `VerticalPlaybook` + `SKILL_PLAYBOOK_MAP`
+7. **Rate limiting (S3)** — No rate limiting on API routes; add `@upstash/ratelimit` edge middleware to prevent unbounded Apollo/OpenAI spend
+8. **Skill 6 flywheel quality (Q6)** — `what-works.md` entries default to `email-variant-1`/`CTO` in auto-mode; derive from Apollo analytics
+9. **`useCampaignSkillRunner` deduplication (U3)** — Still a manual copy of `useSkillRunner` + `runningSkill` state; extract to shared parameterised hook
+10. **`xlsx` package (U6)** — `xlsx@0.18.5` has known CVEs and is abandoned; replace with `exceljs`
