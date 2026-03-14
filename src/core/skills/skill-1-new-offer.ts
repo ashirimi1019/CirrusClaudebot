@@ -10,6 +10,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { getSupabaseClient } from '../../lib/supabase.ts';
 import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
+import { buildSkillContext } from '../../lib/verticals/index.ts';
 import readline from 'readline';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -29,6 +30,7 @@ export interface OfferConfig {
   goToMarket: string;
   pricingPackaging: string;
   successStories: string;
+  default_vertical_id?: string;
 }
 
 interface PositioningInput extends OfferConfig {
@@ -59,6 +61,7 @@ export async function runSkill1NewOffer(config?: OfferConfig): Promise<string> {
   tracker.step('Gather positioning input');
   tracker.step('Write positioning.md');
   tracker.step('Save to database');
+  tracker.step('Load vertical context');
 
   let input: PositioningInput;
 
@@ -135,6 +138,7 @@ export async function runSkill1NewOffer(config?: OfferConfig): Promise<string> {
     {
       name: input.offerName,
       slug: input.offerSlug,
+      default_vertical_id: config?.default_vertical_id || null,
       positioning: {
         category: input.category,
         targetCustomer: input.targetCustomer,
@@ -159,6 +163,33 @@ export async function runSkill1NewOffer(config?: OfferConfig): Promise<string> {
     tracker.warn('Positioning file was saved, but database record may be stale.');
   } else {
     tracker.completeStep('Save to database', 'Upserted offer record');
+  }
+
+  // ─── Step 4: Load vertical context (if configured) ───
+  tracker.startStep('Load vertical context');
+  try {
+    // Look up the offer ID from the database for vertical resolution
+    const { data: offerRow } = await sb
+      .from('offers')
+      .select('id')
+      .eq('slug', input.offerSlug)
+      .single();
+
+    if (offerRow?.id) {
+      const verticalCtx = await buildSkillContext('skill-1', offerRow.id);
+      if (verticalCtx.effectiveVertical) {
+        // Append vertical context to the positioning file
+        const existingContent = fs.readFileSync(positioningPath, 'utf-8');
+        fs.writeFileSync(positioningPath, existingContent + '\n' + verticalCtx.context);
+        tracker.completeStep('Load vertical context', `vertical="${verticalCtx.effectiveVertical}", sections=[${verticalCtx.loadedSections.join(', ')}]`);
+      } else {
+        tracker.completeStep('Load vertical context', 'No vertical configured');
+      }
+    } else {
+      tracker.completeStep('Load vertical context', 'Skipped — offer ID not found in DB');
+    }
+  } catch (err) {
+    tracker.partialStep('Load vertical context', `Warning: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   tracker.printSummary();
