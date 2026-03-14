@@ -19,6 +19,15 @@ import { upsertCompany } from '../../lib/db/companies.ts';
 import { insertEvidence } from '../../lib/db/evidence.ts';
 import { upsertContact } from '../../lib/db/contacts.ts';
 import { scoreCompany, ICP_THRESHOLD } from '../../lib/services/scoring.ts';
+import {
+  resolveGeography,
+  buildApolloLocationFilter,
+  checkCompanyGeography,
+  buildGeographyRejectionMessage,
+  buildGeographySummary,
+  type GeographyConfig,
+  type GeographyRejection,
+} from '../../lib/services/geography.ts';
 import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
 import { validateSkillInputs } from '../../lib/services/validation.ts';
 import { buildSkillContext } from '../../lib/verticals/index.ts';
@@ -133,27 +142,30 @@ export async function runSkill4FindLeads(): Promise<void> {
 
   const strategyPath = path.join(process.cwd(), 'offers', offerSlug, 'campaigns', campaignSlug, 'strategy.md');
   const strategy = readFile(strategyPath);
-  const { roles, geography } = parseStrategy(strategy);
-  tracker.completeStep('Validate inputs', `${roles.length} roles, geography: ${geography.join(', ')}`);
+  const { roles } = parseStrategy(strategy);
+  tracker.completeStep('Validate inputs', `${roles.length} roles`);
 
   // ─── Step 1b: Load vertical context (if configured) ───
   tracker.startStep('Load vertical context');
   let verticalContext = '';
+  let geographyConfig: GeographyConfig = resolveGeography(null);
   try {
     const sb = getSupabaseClient();
     const { data: offerRow } = await sb
       .from('offers')
-      .select('id')
+      .select('id, allowed_countries, allowed_us_states')
       .eq('slug', offerSlug)
       .single();
 
     if (offerRow?.id) {
       const { data: campaignRow } = await sb
         .from('campaigns')
-        .select('id')
+        .select('id, allowed_countries, allowed_us_states')
         .eq('offer_id', offerRow.id)
         .eq('slug', campaignSlug)
         .single();
+
+      geographyConfig = resolveGeography(offerRow, campaignRow ?? null);
 
       const verticalCtx = await buildSkillContext('skill-4', offerRow.id, campaignRow?.id);
       if (verticalCtx.effectiveVertical) {
@@ -190,7 +202,7 @@ export async function runSkill4FindLeads(): Promise<void> {
   for (let i = 0; i < roles.length; i += ROLE_BATCH_SIZE) {
     const roleBatch = roles.slice(i, i + ROLE_BATCH_SIZE);
     try {
-      const companies = await searchCompaniesByHiringRoles(roleBatch, geography, ICP_EMPLOYEE_RANGES, 25);
+      const companies = await searchCompaniesByHiringRoles(roleBatch, buildApolloLocationFilter(geographyConfig), ICP_EMPLOYEE_RANGES, 25);
       for (const c of companies) {
         if (!seenIds.has(c.id)) {
           seenIds.add(c.id);
@@ -228,6 +240,28 @@ export async function runSkill4FindLeads(): Promise<void> {
     tracker.completeStep('Score against ICP', `${qualifyingCompanies.length}/${allCompanies.length} qualify (≥${ICP_THRESHOLD})`, qualifyingCompanies.length);
   }
 
+  // ─── Step 3b: Post-query geography rejection ───
+  const geoRejections: GeographyRejection[] = [];
+  const geoAcceptedCompanies = qualifyingCompanies.filter((company) => {
+    const primaryDomain = (company as any).primary_domain;
+    const domain = primaryDomain
+      ? primaryDomain
+      : company.website_url
+        ? company.website_url.replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '')
+        : `${company.name.toLowerCase().replace(/\s+/g, '')}.com`;
+    const rejection = checkCompanyGeography(
+      { name: company.name, domain, country: company.country, state: (company as any).state },
+      geographyConfig,
+    );
+    if (rejection) {
+      geoRejections.push(rejection);
+      tracker.warn(buildGeographyRejectionMessage(rejection));
+      return false;
+    }
+    return true;
+  });
+  console.log(buildGeographySummary(qualifyingCompanies.length, geoAcceptedCompanies.length, geoRejections, geographyConfig));
+
   // ─── Step 4: Find decision-makers + Step 5: Store in DB ───
   tracker.startStep('Find decision-makers');
   tracker.startStep('Store in database');
@@ -238,7 +272,7 @@ export async function runSkill4FindLeads(): Promise<void> {
   let dbContactFails = 0;
   let dmSearchFails = 0;
 
-  for (const company of qualifyingCompanies) {
+  for (const company of geoAcceptedCompanies) {
     const score = scoreCompany(company);
     const primaryDomain = (company as any).primary_domain;
     const domain = primaryDomain
@@ -258,7 +292,7 @@ export async function runSkill4FindLeads(): Promise<void> {
         employee_count: company.employee_count || null,
         funding_stage: company.funding_stage || null,
         industry: company.industry || null,
-        country: company.country || geography[0] || 'US',
+        country: company.country || 'Unknown',
         fit_score: score.total,
       });
     } catch (err: any) {
