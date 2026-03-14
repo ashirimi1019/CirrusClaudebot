@@ -224,12 +224,16 @@ async function callOpenAIJSON<T>(
  */
 export async function classifyCompanyBatch(
   companies: CompanyClassificationInput[],
-  contextFiles?: { useCaseGuide?: string; icpFramework?: string }
+  contextFiles?: { useCaseGuide?: string; icpFramework?: string; verticalContext?: string }
 ): Promise<CompanyClassification[]> {
   const useCaseGuide = contextFiles?.useCaseGuide || loadContextFile('context/principles/use-case-driven.md');
   const icpFramework = contextFiles?.icpFramework || loadContextFile('context/frameworks/icp-framework.md');
 
-  const systemPrompt = `You are an expert B2B sales strategist for CirrusLabs, a staffing company that provides engineering talent.
+  const verticalInstruction = contextFiles?.verticalContext
+    ? `You are classifying companies for a ${contextFiles.verticalContext.split('\n').find((l) => l.trim().length > 0)?.replace(/^#+\s*/, '') ?? 'technology services'} offering.`
+    : 'You are classifying companies for a staffing company that provides engineering talent.';
+
+  const systemPrompt = `You are an expert B2B sales strategist for CirrusLabs. ${verticalInstruction}
 
 You classify companies into segments based on their hiring signals to determine the best outreach approach.
 

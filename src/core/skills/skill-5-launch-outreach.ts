@@ -524,7 +524,7 @@ export async function runSkill5LaunchOutreach(
 
     // ─── Step 3: Classify companies ───
     tracker.startStep('Classify companies');
-    const classifications = await classifyCompanies(contacts);
+    const classifications = await classifyCompanies(contacts, undefined, verticalContext || undefined);
     const reviewCount = classifications.filter((c) => c.needs_review).length;
     tracker.completeStep(
       'Classify companies',

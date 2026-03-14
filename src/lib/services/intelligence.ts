@@ -48,7 +48,8 @@ const DEFAULT_FALLBACK_SEGMENT: { offer_type: OfferType; service_line: ServiceLi
  */
 export async function classifyCompanies(
   leads: LeadRow[],
-  contextDir?: string
+  contextDir?: string,
+  verticalContext?: string
 ): Promise<CompanyClassification[]> {
   // Deduplicate by company_domain — one classification per company
   const domainMap = new Map<string, CompanyClassificationInput>();
@@ -89,7 +90,7 @@ export async function classifyCompanies(
     console.log(`  → Classifying batch ${batchNum}/${totalBatches} (${batch.length} companies)...`);
 
     try {
-      const results = await classifyCompanyBatch(batch);
+      const results = await classifyCompanyBatch(batch, { verticalContext });
       allClassifications.push(...results);
     } catch (err: any) {
       console.error(`  ❌ Batch ${batchNum} classification failed: ${err.message}`);
