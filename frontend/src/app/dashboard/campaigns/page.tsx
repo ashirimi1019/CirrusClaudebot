@@ -28,6 +28,7 @@ type Campaign = {
   created_at: string;
   campaign_metrics: CampaignMetric[];
   offers: { slug: string } | null;
+  verticals: { name: string; slug: string } | null;
 };
 
 function deriveStatus(c: Campaign): "active" | "complete" | "draft" {
@@ -73,7 +74,7 @@ export default function CampaignsPage() {
     const supabase = createClient();
     supabase
       .from("campaigns")
-      .select("*, campaign_metrics(*), offers(slug)")
+      .select("*, campaign_metrics(*), offers(slug), verticals(name, slug)")
       .order("created_at", { ascending: false })
       .then(({ data }: { data: Campaign[] | null }) => {
         if (data) setCampaigns(data as Campaign[]);
@@ -182,7 +183,7 @@ export default function CampaignsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-neutral-800">
-                {["Campaign", "Status", "Sent", "Contacts", "Reply Rate", "Meetings", "Created", ""].map((h) => (
+                {["Campaign", "Status", "Sent", "Contacts", "Reply Rate", "Meetings", "Created", "Vertical", ""].map((h) => (
                   <th key={h} className="px-5 py-3 text-left text-xs text-neutral-500 font-medium">{h}</th>
                 ))}
               </tr>
@@ -240,6 +241,15 @@ export default function CampaignsPage() {
                         <Calendar className="h-3 w-3" />
                         {new Date(c.created_at).toLocaleDateString()}
                       </span>
+                    </td>
+                    <td className="px-5 py-4">
+                      {c.verticals?.name ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 whitespace-nowrap">
+                          {c.verticals.name}
+                        </span>
+                      ) : (
+                        <span className="text-neutral-600">—</span>
+                      )}
                     </td>
                     <td className="px-5 py-4">
                       {href && (
