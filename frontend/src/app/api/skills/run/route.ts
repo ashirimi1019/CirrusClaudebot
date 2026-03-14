@@ -286,6 +286,27 @@ export async function GET(request: NextRequest) {
     return new Response(JSON.stringify({ error: 'Invalid campaign slug' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
   }
 
+  // Pre-allocate skill_runs row before stream — closes the active-run lock race window
+  let runId: string | null = null;
+  const startedAt = Date.now();
+  try {
+    const { data: runRow } = await adminDb
+      .from('skill_runs')
+      .insert({
+        skill_number: skill,
+        status: 'running',
+        offer_id: earlyOfferId,
+        campaign_id: earlyCampaignId,
+        user_id: userId,
+        started_at: new Date(startedAt).toISOString(),
+      })
+      .select('id')
+      .single();
+    runId = runRow?.id ?? null;
+  } catch {
+    // Non-fatal: DB tracking failure should not block skill execution
+  }
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -309,31 +330,10 @@ export async function GET(request: NextRequest) {
 
       // ── Supabase skill_runs tracking ──────────────────────────────────────
       const sb = adminDb;
-      const startedAt = Date.now();
 
       // Resolve offer/campaign IDs for foreign keys (resolved early for active-run lock)
       const offerId = earlyOfferId;
       const campaignId = earlyCampaignId;
-
-      // Insert a "running" row so the UI can see the run started
-      let runId: string | null = null;
-      try {
-        const { data: runRow } = await sb
-          .from('skill_runs')
-          .insert({
-            skill_number: skill,
-            status: 'running',
-            offer_id: offerId,
-            campaign_id: campaignId,
-            user_id: userId,
-            started_at: new Date(startedAt).toISOString(),
-          })
-          .select('id')
-          .single();
-        runId = runRow?.id ?? null;
-      } catch {
-        // Non-fatal: DB tracking failure should not block skill execution
-      }
 
       const finaliseRun = async (exitCode: number) => {
         if (!runId) return;
