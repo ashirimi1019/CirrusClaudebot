@@ -28,16 +28,23 @@ export function VerticalSelect({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
     const supabase = createClient();
     supabase
       .from("verticals")
       .select("id, slug, name")
       .eq("active", true)
       .order("name")
-      .then(({ data }: { data: unknown }) => {
-        if (data) setVerticals(data as VerticalOption[]);
-        setLoading(false);
+      .then(({ data }: { data: VerticalOption[] | null }) => {
+        if (!cancelled) {
+          if (data) setVerticals(data);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLoading(false);
       });
+    return () => { cancelled = true; };
   }, []);
 
   return (
