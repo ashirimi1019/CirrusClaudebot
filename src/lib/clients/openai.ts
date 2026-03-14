@@ -162,6 +162,108 @@ Subject: [compelling subject line]
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// LINKEDIN VARIANT GENERATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface LinkedInVariant {
+  connection_message: string;
+  dm_message: string;
+  angle: string;
+}
+
+export async function generateLinkedInVariants(input: {
+  positioningContext: string;
+  strategyContext: string;
+  linkedinPrinciples: string;
+  campaignContext?: string;
+  buildDynamicContextFn?: ((campaignId?: string, verticalSlug?: string | null) => Promise<string>) | null;
+  campaignId?: string;
+  verticalSlug?: string | null;
+}): Promise<LinkedInVariant[]> {
+  const apiKey = getApiKey();
+
+  // Get flywheel context if available
+  let flywheelContext = '';
+  if (input.buildDynamicContextFn) {
+    try {
+      flywheelContext = await input.buildDynamicContextFn(input.campaignId, input.verticalSlug ?? null);
+    } catch { /* ignore — flywheel unavailable */ }
+  }
+
+  const systemPrompt = `You are an expert LinkedIn outreach copywriter. Generate 3 distinct LinkedIn variants for an outbound campaign.
+Each variant must have a connection_message (≤300 chars, no hashtags) and a dm_message (≤500 chars).
+Variants must differ meaningfully in angle, tone, or hook — not just surface-level word swaps.
+Return JSON: { "variants": [{ "connection_message": "...", "dm_message": "...", "angle": "..." }] }`;
+
+  const userPrompt = `Generate 3 LinkedIn variants for the following campaign.
+
+--- LINKEDIN PRINCIPLES (follow exactly) ---
+${input.linkedinPrinciples}
+---
+
+--- OFFER POSITIONING ---
+${input.positioningContext}
+---
+
+--- CAMPAIGN STRATEGY ---
+${input.strategyContext}
+---
+
+${flywheelContext ? `--- LEARNINGS FROM PAST CAMPAIGNS ---\n${flywheelContext}\n---\n\n` : ''}${input.campaignContext ? `--- ADDITIONAL CAMPAIGN CONTEXT ---\n${input.campaignContext}\n---\n\n` : ''}Create 3 variants with meaningfully different angles (e.g., signal-first, problem-first, curiosity-hook). Each variant:
+- connection_message: ≤300 chars, no hashtags, personalized to the hiring signal
+- dm_message: ≤500 chars, conversational, references specific context, soft CTA
+- angle: brief label for this variant's approach
+
+Use placeholder tokens [Name], [Company], [role] where appropriate.`;
+
+  const response = await withRetry(
+    () => axios.post(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.7,
+        max_tokens: 1500,
+        response_format: { type: 'json_object' },
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 60000,
+      }
+    ),
+    { label: 'openai_linkedin_variants', maxAttempts: 3 }
+  );
+
+  const content = response.data?.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error('openai_linkedin_variants: OpenAI returned empty response');
+  }
+
+  let parsed: { variants: LinkedInVariant[] };
+  try {
+    parsed = JSON.parse(content);
+  } catch (err) {
+    throw new Error(`openai_linkedin_variants: Failed to parse JSON response. Raw: ${content.slice(0, 500)}`);
+  }
+
+  if (!Array.isArray(parsed.variants) || parsed.variants.length === 0) {
+    throw new Error(`openai_linkedin_variants: No variants in response. Raw: ${content.slice(0, 500)}`);
+  }
+
+  return parsed.variants.map((v) => ({
+    connection_message: v.connection_message || '',
+    dm_message: v.dm_message || '',
+    angle: v.angle || 'unknown',
+  }));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // INTELLIGENCE LAYER — Company Classification, Contact Adaptation, Segment Copy
 // ═══════════════════════════════════════════════════════════════════════════════
 

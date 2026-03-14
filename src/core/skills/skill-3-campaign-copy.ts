@@ -8,7 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { generateDraft } from '../../lib/clients/openai.ts';
+import { generateDraft, generateLinkedInVariants, LinkedInVariant } from '../../lib/clients/openai.ts';
 import { getSupabaseClient } from '../../lib/supabase.ts';
 import { SkillRunTracker } from '../../lib/services/run-tracker.ts';
 import { validateSkillInputs } from '../../lib/services/validation.ts';
@@ -87,11 +87,13 @@ export async function runSkill3CampaignCopy(): Promise<void> {
   tracker.startStep('Load vertical context');
   let verticalContext = '';
   let effectiveVerticalSlug: string | null = null;
+  let campaignId: string | undefined;
   try {
     const sb = getSupabaseClient();
     const { data: offerRow } = await sb.from('offers').select('id').eq('slug', offerSlug).single();
     if (offerRow?.id) {
       const { data: campaignRow } = await sb.from('campaigns').select('id').eq('offer_id', offerRow.id).eq('slug', campaignSlug).single();
+      campaignId = campaignRow?.id;
       const verticalCtx = await buildSkillContext('skill-3', offerRow.id, campaignRow?.id);
       if (verticalCtx.effectiveVertical) {
         verticalContext = verticalCtx.context;
@@ -160,12 +162,53 @@ export async function runSkill3CampaignCopy(): Promise<void> {
 
   // ─── Step 3: Generate LinkedIn variants ───
   tracker.startStep('Generate LinkedIn variants');
-  const linkedinVariants = [
-    { name: 'linkedin-variant-1', content: generateLinkedInMessage1(positioning, strategy) },
-    { name: 'linkedin-variant-2', content: generateLinkedInMessage2(positioning, strategy) },
-    { name: 'linkedin-variant-3', content: generateLinkedInMessage3(positioning, strategy) },
-  ];
-  tracker.completeStep('Generate LinkedIn variants', '3 variants (template-based)', 3);
+
+  // Load linkedin-principles.md (full content, no truncation)
+  const linkedinPrinciplesPath = path.join(process.cwd(), 'context', 'copywriting', 'linkedin-principles.md');
+  let linkedinPrinciples = '';
+  try {
+    linkedinPrinciples = fs.readFileSync(linkedinPrinciplesPath, 'utf-8');
+  } catch {
+    tracker.warn('Could not load linkedin-principles.md — will proceed without it');
+  }
+
+  // Try to load buildDynamicContext for flywheel injection (same pattern as openai.ts)
+  let buildDynamicContext: ((campaignId?: string, verticalSlug?: string | null) => Promise<string>) | null = null;
+  try {
+    const memoryModule = await import('../../brain/memory.js');
+    buildDynamicContext = memoryModule.buildDynamicContext;
+  } catch { /* Memory module not available — OK */ }
+
+  interface LinkedInVariantOutput { name: string; connection_message: string; dm_message: string; angle: string; }
+  let linkedinVariants: LinkedInVariantOutput[];
+
+  try {
+    const aiVariants: LinkedInVariant[] = await generateLinkedInVariants({
+      positioningContext: positioning,
+      strategyContext: strategy,
+      linkedinPrinciples,
+      campaignContext: verticalContext || undefined,
+      buildDynamicContextFn: buildDynamicContext,
+      campaignId,
+      verticalSlug: effectiveVerticalSlug,
+    });
+
+    linkedinVariants = aiVariants.map((v, idx) => ({
+      name: `linkedin-variant-${idx + 1}`,
+      connection_message: v.connection_message,
+      dm_message: v.dm_message,
+      angle: v.angle,
+    }));
+    tracker.completeStep('Generate LinkedIn variants', `3 variants (OpenAI-generated, angles: ${aiVariants.map((v) => v.angle).join(', ')})`, 3);
+  } catch (err: any) {
+    tracker.warn(`OpenAI LinkedIn generation failed: ${err.message} — falling back to static templates`);
+    linkedinVariants = [
+      { name: 'linkedin-variant-1', ...generateLinkedInFallback1(positioning, strategy) },
+      { name: 'linkedin-variant-2', ...generateLinkedInFallback2(positioning, strategy) },
+      { name: 'linkedin-variant-3', ...generateLinkedInFallback3(positioning, strategy) },
+    ];
+    tracker.completeStep('Generate LinkedIn variants', '3 variants (static fallback templates)', 3);
+  }
 
   // ─── Step 4: Write copy files ───
   tracker.startStep('Write copy files');
@@ -195,7 +238,12 @@ export async function runSkill3CampaignCopy(): Promise<void> {
     ``, `---`, ``,
   ];
   linkedinVariants.forEach((variant, idx) => {
-    linkedinMdLines.push(`## Variant ${idx + 1}`, ``, variant.content, ``, `---`, ``);
+    linkedinMdLines.push(
+      `## Variant ${idx + 1}${variant.angle ? ` — ${variant.angle}` : ''}`, ``,
+      `### Connection Request`, ``, variant.connection_message, ``,
+      `### DM (after they accept)`, ``, variant.dm_message, ``,
+      `---`, ``
+    );
   });
   fs.writeFileSync(path.join(copyDir, 'linkedin-variants.md'), linkedinMdLines.join('\n'));
 
@@ -303,38 +351,51 @@ Strategy: ${strategy}
 `;
 }
 
-function generateLinkedInMessage1(positioning: string, strategy: string): string {
-  return `Thanks for connecting! I noticed you're leading engineering at [Company] and [Company] is scaling the team.
+// Static fallback functions — used if OpenAI LinkedIn generation fails
+function generateLinkedInFallback1(_positioning: string, _strategy: string): { connection_message: string; dm_message: string; angle: string } {
+  return {
+    connection_message: `Hi [Name] — noticed [Company] is scaling the engineering team. We specialize in placing [role]. Would be good to connect.`,
+    dm_message: `Thanks for connecting! I noticed [Company] is scaling the team and hiring for [role].
 
-We specialize in placing [role] at companies like yours. Most companies spend 3-4 months recruiting.
+We specialize in placing [role] at companies like yours. Most companies spend 3-4 months recruiting — we typically do it in weeks.
 
-Would be worth a quick chat to see if it makes sense to work together.
+Would be worth a quick chat to see if it makes sense to work together?
 
-[Your name]`;
+Ashir`,
+    angle: 'Signal-first (speed advantage)',
+  };
 }
 
-function generateLinkedInMessage2(positioning: string, strategy: string): string {
-  return `Hi [Name],
+function generateLinkedInFallback2(_positioning: string, _strategy: string): { connection_message: string; dm_message: string; angle: string } {
+  return {
+    connection_message: `Hi [Name] — saw [Company] posted for [role]. We help companies fill roles like this fast. Would love to connect.`,
+    dm_message: `Hi [Name],
 
-Quick note - I saw [Company] posted a job for [role]. Finding [role plural] takes most companies months.
+Quick note — saw [Company] posted a job for [role]. Finding [role plural] takes most companies months.
 
 We typically do it in weeks because we start with vetted candidates, not job posts.
 
 No pressure, but thought worth flagging.
 
-[Your name]`;
+Ashir`,
+    angle: 'Problem-first (pain point)',
+  };
 }
 
-function generateLinkedInMessage3(positioning: string, strategy: string): string {
-  return `[Name], thanks for connecting!
+function generateLinkedInFallback3(_positioning: string, _strategy: string): { connection_message: string; dm_message: string; angle: string } {
+  return {
+    connection_message: `Hi [Name] — [Company] looks like it's at an interesting growth stage. Would love to connect and stay in touch.`,
+    dm_message: `[Name], thanks for connecting!
 
-[Company] is at an interesting inflection point with all the hiring you're doing for [role].
+[Company] is at an interesting inflection point with the hiring you're doing for [role].
 
 This is typically where teams start feeling the pinch on recruitment timelines.
 
 Worth a 15-min call to see if we can help accelerate it?
 
-[Your name]`;
+Ashir`,
+    angle: 'Curiosity-hook (growth inflection)',
+  };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
