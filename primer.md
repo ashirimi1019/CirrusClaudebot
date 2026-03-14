@@ -216,6 +216,48 @@ context/
 
 ## Change Log
 
+### 2026-03-14 — Six-Phase Intelligence Sprint (commits 4716e17 → d9a00ab)
+
+**Goal:** Make vertical context actively drive runtime behavior (not just logging), fix a metrics denominator bug, close the learnings read-back gap, add API rate limiting, and replace static LinkedIn templates with OpenAI-generated dynamic variants.
+
+**Phase 1 — Skill 4 vertical-aware role list** (commits 4716e17, 34e5bb1)
+- **Root issue:** `parseStrategy()` returned the same 10 generic roles regardless of vertical; `verticalCtx.effectiveVertical` was available but never used for role targeting
+- **Fix:** Added `VERTICAL_ROLE_MAP` (3 verticals × 10 roles each, distinct per vertical domain) to `skill-4-find-leads.ts`; changed `const { roles }` → `let { roles }`; role list is now overridden inside the vertical context try block when a matching key is found
+- **Files:** `src/core/skills/skill-4-find-leads.ts`
+- **Validation:** Different verticals produce different Apollo search role lists; logs show which roles were applied and first 3 for quick debugging
+
+**Phase 2 — Skill 5 vertical-aware classification** (commit 260e31f)
+- **Root issue:** `classifyCompanyBatch()` used a hardcoded "staffing company" system prompt for all verticals; classification framing was independent of vertical context
+- **Fix:** Added `verticalContext?: string` to `classifyCompanyBatch` `contextFiles` param; system prompt now uses the first meaningful line of `verticalContext` as the offering descriptor when present, falls back to "staffing company" when absent; `classifyCompanies()` in `intelligence.ts` accepts and forwards `verticalContext`; Skill 5 call site passes `verticalContext || undefined`
+- **Files:** `src/lib/clients/openai.ts`, `src/lib/services/intelligence.ts`, `src/core/skills/skill-5-launch-outreach.ts`
+- **Validation:** Caller-side `|| undefined` correctly gates whitespace-only strings before they reach the classifier
+
+**Phase 3 — Fix Apollo reply-rate denominator** (commit 944591a)
+- **Root issue:** `emails_sent` in `getSequenceMetrics()` was mapped to `c.num_send_email_steps` (sequence step count, 1-5) instead of email delivery volume
+- **Fix:** Changed to `c.num_sent_emails ?? c.emails_sent_count ?? c.num_contacts ?? 0`; uses nullish coalescing (not `||`) to correctly handle 0 delivery count; comment documents the field semantics and fallback rationale
+- **Files:** `src/lib/clients/apollo.ts`
+- **Remaining uncertainty:** `num_sent_emails` is the best-supported field based on code inspection; runtime validation with a live campaign recommended
+
+**Phase 4 — Per-vertical learnings read-back** (commit c344779)
+- **Root issue:** `buildDynamicContext()` accepted only `campaignId`; `getWhatWorks()` already supported vertical-specific file loading but was never passed a `verticalSlug`; the flywheel was write-only for vertical learnings
+- **Fix:** Added `verticalSlug?: string | null` as 2nd param to `buildDynamicContext` in `memory.ts` → forwarded to `getWhatWorks`; updated `buildDynamicContextFn` type in `openai.ts` to accept `verticalSlug`; added `verticalSlug` to `contextFiles` for `generateSegmentVariants`; added 4th positional param to `generateAllSegmentVariants` in `segment-copy.ts`; Skills 3 and 5 extract `effectiveVerticalSlug` before their try blocks and pass it downstream
+- **Files:** `src/brain/memory.ts`, `src/lib/clients/openai.ts`, `src/lib/services/segment-copy.ts`, `src/core/skills/skill-3-campaign-copy.ts`, `src/core/skills/skill-5-launch-outreach.ts`
+
+**Phase 5 — Rate limiting** (commit 2437272)
+- **Root issue:** `/api/skills/run` had no rate limiting; repeated hits could spend unbounded Apollo/OpenAI credits
+- **Fix:** Created `frontend/src/lib/rate-limit.ts` — `skillRunLimiter` singleton using `@upstash/ratelimit` + `@upstash/redis`; `slidingWindow(10, '1 h')` per IP; gracefully returns `null` when env vars absent (local dev no-op); applied to `/api/skills/run/route.ts` before any skill execution; returns 429 with `X-RateLimit-*` headers on breach; added `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` to `.env.example`
+- **Files:** `frontend/src/lib/rate-limit.ts` (new), `frontend/src/app/api/skills/run/route.ts`, `.env.example`
+- **Required deployment step:** Add `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` to Vercel env vars; until then rate limiting is disabled
+
+**Phase 6 — LinkedIn dynamic variants** (commit d9a00ab)
+- **Root issue:** `skill-3` generated LinkedIn messages from static template strings; positioning/strategy/flywheel context were not used; variants were trivially similar
+- **Fix:** Added `LinkedInVariant` interface and `generateLinkedInVariants()` to `openai.ts`; uses `gpt-4o-mini` with JSON response format; injects full `linkedin-principles.md` (no truncation), `positioningContext`, `strategyContext`, optional flywheel context via `buildDynamicContextFn`; requires 3 meaningfully distinct variants by angle; falls back to renamed `generateLinkedInFallback1/2/3()` functions on error; `skill-3` now attempts dynamic generation first with fallback to static on exception
+- **Files:** `src/lib/clients/openai.ts`, `src/core/skills/skill-3-campaign-copy.ts`
+
+**All changes:** Frontend TypeScript: 0 errors throughout. ~60 pre-existing ESM errors in `src/core/skills/*.ts` unchanged.
+
+---
+
 ### 2026-03-14 — Full codebase bug fix pass (28 fixes, commit b658b95)
 
 **Source:** 5-agent code review across all codebase sections
@@ -508,10 +550,12 @@ context/verticals/cloud-software-delivery/
 1. **Run end-to-end demo with a vertical-aware offer** — Section 4 UI is complete; validate the full resolution chain in production: create offer with staffing vertical → create campaign → confirm `EffectiveVerticalBadge` shows "(offer)" → add campaign override → confirm badge updates to "(override)"
 2. **Geography UI** — Add `allowed_countries` / `allowed_us_states` config fields to offer/campaign create forms so operators can set geography scope from the dashboard (migration 007 applied; backend fully wired; frontend UI not yet built)
 3. **Make scoring vertical-configurable** — `scoring.ts` currently hardcoded; vertical `scoring.md` should influence ICP scoring weights
-4. **Skills 4 & 5: actively consume vertical context (Q3, Q4)** — Skill 4 role list still uses 10 default engineering roles regardless of vertical; Skill 5 `classifyCompanyBatch()` uses hardcoded staffing service-line options for all verticals
-5. **LinkedIn variants (Q5)** — Still static template strings; `generateDraft()` not called; `positioning` and `strategy` args not used
-6. **Per-vertical learnings read-back (Q7)** — Skill 6 writes to `context/verticals/{slug}/learnings/what-works.md` but no skill reads it back; add `learnings` field to `VerticalPlaybook` + `SKILL_PLAYBOOK_MAP`
-7. **Rate limiting (S3)** — No rate limiting on API routes; add `@upstash/ratelimit` edge middleware to prevent unbounded Apollo/OpenAI spend
+4. ~~**Skills 4 & 5: actively consume vertical context**~~ ✅ DONE (2026-03-14 sprint)
+5. ~~**LinkedIn variants**~~ ✅ DONE (2026-03-14 sprint)
+6. ~~**Per-vertical learnings read-back**~~ ✅ DONE (2026-03-14 sprint)
+7. ~~**Rate limiting**~~ ✅ DONE (2026-03-14 sprint)
 8. **Skill 6 flywheel quality (Q6)** — `what-works.md` entries default to `email-variant-1`/`CTO` in auto-mode; derive from Apollo analytics
 9. **`useCampaignSkillRunner` deduplication (U3)** — Still a manual copy of `useSkillRunner` + `runningSkill` state; extract to shared parameterised hook
 10. **`xlsx` package (U6)** — `xlsx@0.18.5` has known CVEs and is abandoned; replace with `exceljs`
+11. **Verify Apollo `num_sent_emails` field at runtime** — fallback chain `num_sent_emails ?? emails_sent_count ?? num_contacts` is best-supported from code inspection; confirm with a live campaign that the correct delivery volume is returned
+12. **Upstash Redis setup for production rate limiting** — `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` must be added to Vercel environment variables; rate limiting is a graceful no-op until then
