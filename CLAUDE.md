@@ -1,402 +1,246 @@
-# CirrusLabs - Agentic Claude Bot System
+# CirrusLabs — Signal-Driven Outbound Automation
 
-**System Type:** Agent-based (not workflow-based)
-**Architecture:** 6 Sequential Skills reading context files
-**Status:** ✅ Complete MVP
+**Stack:** TypeScript · Next.js (frontend) · Supabase · Apollo.io · OpenAI
+**Deployment:** https://cirrus-claudebot.vercel.app
+**GitHub:** https://github.com/ashirimi1019/CirrusClaudebot
 
 ---
 
-## primer.md — Required Reading
+## primer.md — Read This First
 
-> **`primer.md` is the living memory of this project.** It is the primary continuity and project-state reference.
+> **`primer.md` is the living memory of this project.** Read it before making any changes. Update it after every change.
 
-**Rules for every Claude Code session:**
-1. **Read `primer.md` before making any changes** — it contains the latest architecture decisions, vertical design status, known limitations, and change history
-2. **Update `primer.md` after every change** — no change is too small. Every modification to code, schema, config, UI, prompts, or logic must be reflected there
-3. **Keep it current** — if implementation decisions change, update `primer.md` accordingly
-4. **Implementation must stay aligned** with the latest decisions recorded in `primer.md`
-5. **The change log section** must be updated with: what changed, why, and affected files
-
-`primer.md` supersedes stale information elsewhere. If there is a conflict between `primer.md` and other docs, `primer.md` is authoritative for current project state.
+**Rules:**
+1. **Read `primer.md` before any changes** — latest architecture, vertical status, known limitations, change history
+2. **Update `primer.md` after every change** — code, schema, config, UI, prompts
+3. `primer.md` supersedes all other docs when there's a conflict
 
 ---
 
 ## System Overview
 
-This is a **signal-driven outbound campaign automation system** for CirrusLabs's staffing business.
+Signal-driven outbound campaign automation for CirrusLabs's staffing/consulting business.
 
-**Core Principle:** Experts encode their knowledge in markdown context files. The agent system reads those files and adapts intelligently to each offer and campaign.
+**Core loop:** Define ICP → Detect signals → Generate copy → Find leads → Send → Measure → Learn → Repeat (better)
 
-Instead of:
-- Static workflows (like Clay)
-- Manual configuration every time
-- Generic outreach
-
-This system:
-- Reads your ICP framework
-- Reads your email principles
-- Reads your signal strategy
-- Adapts to each campaign automatically
-- Improves itself through learnings
+Expert knowledge lives in `.md` files under `context/`. The 6 skills read those files and adapt intelligently to each offer and campaign.
 
 ---
 
 ## The 6 Skills
 
-### Skill 1: New Offer (File-based, no cost)
-**Input:** Offer name ("Talent As A Service - US")
-**Process:** Walk through 13-section positioning canvas
-**Output:** `offers/{slug}/positioning.md` + database record
-**Command:** `npm run skill:1`
+| Skill | Command | Cost | Output |
+|-------|---------|------|--------|
+| 1 — New Offer | `npm run skill:1` | Free | `offers/{slug}/positioning.md` + DB record |
+| 2 — Campaign Strategy | `npm run skill:2` | Free | `offers/{slug}/campaigns/{campaign}/strategy.md` + DB record |
+| 3 — Campaign Copy | `npm run skill:3 -- {offer} {campaign}` | ~$0.50 OpenAI | `copy/email-variants.md`, `linkedin-variants.md`, `personalization-notes.md` |
+| 4 — Find Leads | `npm run skill:4 -- {offer} {campaign}` | ~$2-5 Apollo | `leads/all_leads.csv` (company+contact per row) |
+| 5 — Launch Outreach | `npm run skill:5 -- {offer} {campaign}` | Free | Apollo sequences created; `outreach/messages.csv` |
+| 6 — Campaign Review | `npm run skill:6 -- {offer} {campaign}` | Free | `results/learnings.md` + updated `what-works.md` |
 
-### Skill 2: Campaign Strategy (File-based, no cost)
-**Input:** Offer slug + signal hypothesis
-**Process:** Design signal targeting strategy, choose messaging framework
-**Output:** `offers/{slug}/campaigns/{campaign}/strategy.md` + database record
-**Command:** `npm run skill:2`
-
-### Skill 3: Campaign Copy (LLM cost ~$0.50)
-**Input:** Offer slug + campaign slug
-**Process:** Generate 3 email variants + 3 LinkedIn variants using OpenAI, guided by email-principles.md
-**Output:** Markdown files in `offers/{slug}/campaigns/{campaign}/copy/`
-- `email-variants.md` — 3 email variants with subject + body
-- `linkedin-variants.md` — 3 LinkedIn DM variants
-- `personalization-notes.md` — placeholder reference guide
-**Command:** `npm run skill:3 -- {offer-slug} {campaign-slug}`
-
-### Skill 4: Find Leads (API cost ~$2-5)
-**Input:** Offer slug + campaign slug
-**Process:**
-  1. Call Apollo.io → Search companies by hiring signals (10 engineering roles)
-  2. Score against ICP — skip enriching non-matches (saves credits)
-  3. Call Apollo.io → Find decision-makers for qualifying companies
-  4. Deduplicate by email + domain
-  5. Store companies + contacts in database
-**Output:** `offers/{slug}/campaigns/{campaign}/leads/all_leads.csv`
-- Combined format: company_name, domain, hiring_signal, first_name, last_name, title, email, linkedin_url
-**Command:** `npm run skill:4 -- {offer-slug} {campaign-slug}`
-
-### Skill 5: Launch Outreach (File-based, no cost)
-**Input:** Offer slug + campaign slug
-**Process:** Load copy variants + leads CSV, auto-replace placeholders, export for Apollo sequences
-**Output:** `offers/{slug}/campaigns/{campaign}/outreach/messages.csv`
-- Placeholders replaced automatically: [Company Name], [First Name], [role], etc.
-**Command:** `npm run skill:5 -- {offer-slug} {campaign-slug}`
-
-### Skill 6: Campaign Review (Analysis, no cost)
-**Input:** Campaign results (manual input from Apollo analytics)
-**Process:** Analyze metrics, calculate reply/meeting/buyer rates, identify winners, update learnings
-**Output:** `offers/{slug}/campaigns/{campaign}/results/learnings.md` + updated `context/learnings/what-works.md`
-**Command:** `npm run skill:6 -- {offer-slug} {campaign-slug}`
-
----
-
-## How to Run a Campaign (End-to-End)
+### End-to-End Campaign
 
 ```bash
-# 1. Create offer positioning
-npm run skill:1
-# → Prompts interactively through 13-section canvas
-# → Output: offers/talent-as-service-us/positioning.md
-
-# 2. Design campaign strategy
-npm run skill:2
-# → Prompts for signal hypothesis + messaging framework
-# → Output: offers/.../campaigns/hiring-data-engineers/strategy.md
-
-# 3. Generate email & LinkedIn copy
-npm run skill:3 -- talent-as-service-us hiring-data-engineers
-# → Output: copy/email-variants.md, linkedin-variants.md, personalization-notes.md
-
-# 4. Find leads via Apollo.io (COSTS ~$2-5 in API credits)
-npm run skill:4 -- talent-as-service-us hiring-data-engineers
-# → WARNING: Calls Apollo API, consumes credits
-# → Output: leads/all_leads.csv (company + contact in one row)
-
-# 5. Build outreach messages (auto-personalizes placeholders)
-npm run skill:5 -- talent-as-service-us hiring-data-engineers
-# → Output: outreach/messages.csv (ready for Apollo sequences)
-
-# 6. Upload to Apollo sequences
-# → Go to Apollo → Sequences → Create sequence
-# → Import messages.csv
-# → Launch campaign
-# → Wait 7-14 days for results
-
-# 7. Analyze results
-npm run skill:6 -- talent-as-service-us hiring-data-engineers
-# → Input: Reply count, meetings, closed deals, feedback
-# → Output: results/learnings.md + updated what-works.md
+npm run skill:1                                                      # Create offer (interactive)
+npm run skill:2                                                      # Campaign strategy (interactive)
+npm run skill:3 -- talent-as-service-us hiring-data-engineers       # Generate copy
+npm run skill:4 -- talent-as-service-us hiring-data-engineers       # Find leads (costs Apollo credits)
+npm run skill:5 -- talent-as-service-us hiring-data-engineers       # Launch to Apollo sequences
+npm run skill:6 -- talent-as-service-us hiring-data-engineers       # Review + update learnings
 ```
 
 ---
 
-## Context Files (Your Expertise)
+## Frontend (Dashboard)
 
-All skills read from `/context/`:
+```bash
+cd frontend && npm run dev          # Dev server — http://localhost:3000
+cd frontend && npm run build        # Production build
+cd frontend && npx tsc --noEmit     # TypeScript check — MUST pass before committing
+```
 
-### Frameworks
-- `frameworks/icp-framework.md` — Who you target, scoring rules, disqualifiers
-- `frameworks/positioning-canvas.md` — 13-section positioning template
-- `frameworks/signal-generation-guide.md` — Signal hierarchy, Apollo query mapping, freshness rules
-- `frameworks/signal-brainstorming-template.md` — Template for new campaign signal design
-- `frameworks/contact-finding-guide.md` — Decision-maker discovery strategy
-
-### Copywriting
-- `copywriting/email-principles.md` — Subject lines, body structure, CTAs (injected into Skill 3 prompts)
-- `copywriting/linkedin-principles.md` — CEO account safety, DM strategy
-
-### Principles
-- `principles/permissionless-value.md` — Value-first outreach checklist
-- `principles/use-case-driven.md` — Use-case mapping per hiring role
-- `principles/mistakes-to-avoid.md` — 17 specific mistakes to avoid
-
-### API Guides
-- `api-guides/apollo-capabilities-guide.md` — Apollo feature map, data quality notes, setup
-- `api-guides/apollo-api-guide.md` — Endpoints, rate limits, error handling
-- `api-guides/openai-api-guide.md` — Prompt structure, output format, cost
-- `api-guides/supabase-guide.md` — Tables, setup, useful queries
-
-### Learnings
-- `learnings/what-works.md` — Campaign results (grows over time, informs future copy)
+**Dashboard:** http://localhost:3000/dashboard
+**Vercel:** https://cirrus-claudebot.vercel.app
 
 ---
 
 ## Database Schema
 
-All stored in Supabase:
+**Supabase** — 7 migrations applied (`supabase/migrations/001` through `007`):
 
 | Table | Purpose |
 |-------|---------|
-| `offers` | Offer definitions + positioning |
+| `offers` | Offer definitions + positioning; `default_vertical_id` FK, `allowed_countries/states` |
 | `companies` | Discovered companies + ICP scores |
-| `evidence` | Hiring signals (job posts, funding events) |
-| `contacts` | Decision-makers (CTOs, VPs, Eng Managers) |
-| `campaigns` | Campaign strategies + status |
-| `campaign_companies` | Which companies are in which campaigns |
-| `message_variants` | Email/LinkedIn copy variants per campaign |
-| `messages` | Sent messages + tracking status |
-| `tool_usage` | API cost tracking per tool call |
+| `evidence` | Hiring signals |
+| `contacts` | Decision-makers — UNIQUE on email |
+| `campaigns` | Strategies + status; `vertical_id` FK, `allowed_countries/states` |
+| `campaign_companies` | Company ↔ campaign membership |
+| `message_variants` | Email/LinkedIn copy per campaign |
+| `messages` | Sent messages + tracking |
+| `tool_usage` | API cost tracking per call |
+| `skill_runs` | Skill execution history + SSE log lines |
+| `verticals` | 3 verticals: staffing, ai-data-consulting, cloud-software-delivery |
+| `company_intelligence` | OpenAI classification per company |
+| `contact_intelligence` | Contact-level segment assignment |
+| `segment_summaries` | Per-campaign segment rollups |
+| `campaign_sequences` | Apollo sequences — UNIQUE(campaign_id, segment_key) |
 
-Migration file: `supabase/migrations/001_apollo_gtm_schema.sql`
-
----
-
-## The Flywheel
-
-```
-Campaign 1 runs
-  ↓
-Skill 6 analyzes results
-  ↓
-Updates context/learnings/what-works.md
-  ↓
-Campaign 2 reads updated learnings
-  ↓
-Skills 1-3 adapt based on what worked
-  ↓
-Campaign 2 performs better
-  ↓
-...repeat
-```
-
-Each iteration gets smarter.
+**RLS:** Disabled — anon key can read all tables.
 
 ---
 
-## API Clients (Already Built)
+## Context Files (Your Expertise)
 
-| Client | File | Purpose |
-|--------|------|---------|
-| Apollo.io | `src/lib/clients/apollo.ts` | Company search, contact discovery, sequences, analytics |
-| OpenAI | `src/lib/clients/openai.ts` | Email + LinkedIn copy generation (Skill 3) |
-| Supabase | `src/lib/supabase.ts` | Database client + TypeScript types |
+All skills read from `context/`:
 
-All clients:
-- ✅ TypeScript typed
-- ✅ Error handling + retries
-- ✅ Cost logging to `tool_usage` table
-- ✅ Deduplication-safe
+```
+context/
+  frameworks/      icp-framework.md, positioning-canvas.md, signal-generation-guide.md,
+                   signal-brainstorming-template.md, contact-finding-guide.md
+  copywriting/     email-principles.md, linkedin-principles.md
+  principles/      permissionless-value.md, use-case-driven.md, mistakes-to-avoid.md
+  api-guides/      apollo-capabilities-guide.md, apollo-api-guide.md, openai-api-guide.md, supabase-guide.md
+  learnings/       what-works.md  ← grows with each campaign
+  verticals/       staffing/, ai-data-consulting/, cloud-software-delivery/  (8 .md files each)
+```
 
-**Apollo.io is the single platform**: replaces TheirStack (hiring signals) + Hunter.io/Parallel (contacts) + Instantly (sequences + analytics)
+---
+
+## Vertical System
+
+3 verticals supported: **staffing**, **ai-data-consulting**, **cloud-software-delivery**
+
+- Playbooks: 8 `.md` files each under `context/verticals/{slug}/` (overview, icp, buyers, signals, scoring, messaging, objections, proof-points)
+- Resolution: `campaign.vertical_id ?? offer.default_vertical_id`
+- Entry point: `buildSkillContext(skillId, offerId, campaignId?)` in `src/lib/verticals/`
+- All 6 skills call `buildSkillContext()` — appends vertical context to prompts/files
+- **Scoring is still hardcoded** in `scoring.ts` — vertical `scoring.md` is informational only, not programmatically applied
+
+---
+
+## Geography Filtering (Skill 4)
+
+- Default allowed scope: **Americas** — United States, Canada, Mexico, Brazil, Argentina, Chile, Colombia, Peru, Uruguay
+- Singapore, India, UK, Australia, and other out-of-scope countries are logged as `[GEOGRAPHY REJECT]` and excluded **before** contact enrichment (saves Apollo credits)
+- Override per offer or campaign via `allowed_countries` + `allowed_us_states` DB columns (migration 007)
+- Resolution: `campaign.allowed_countries ?? offer.allowed_countries ?? DEFAULT_ALLOWED_COUNTRIES`
+- All geography logic in `src/lib/services/geography.ts` — no other file should hardcode country lists
+- **Frontend UI not yet built** — set overrides directly in Supabase if needed
 
 ---
 
 ## File Organization
 
 ```
-CirrusLabs/
-├── context/                          ← Your expertise (14 files)
-│   ├── frameworks/                   (icp, positioning-canvas, signal-guide, signal-template, contact-finding)
-│   ├── copywriting/                  (email-principles, linkedin-principles)
-│   ├── principles/                   (permissionless-value, use-case-driven, mistakes-to-avoid)
-│   ├── api-guides/                   (apollo-capabilities, apollo-api, openai-api, supabase)
-│   └── learnings/
-│       └── what-works.md             ← Grows with each campaign
-│   └── verticals/                       ← Per-vertical playbook directories
-│       ├── staffing/                    (8 .md playbook files each)
-│       ├── ai-data-consulting/
-│       └── cloud-software-delivery/
-│
-├── offers/                           ← Per-offer + per-campaign data
+├── context/                     ← Expert knowledge (.md files — edit these to tune the system)
+├── offers/                      ← Per-offer + per-campaign outputs
 │   └── {offer-slug}/
-│       ├── positioning.md            (Skill 1 output)
-│       └── campaigns/
-│           └── {campaign-slug}/
-│               ├── strategy.md       (Skill 2 output)
-│               ├── copy/             (Skill 3 output)
-│               │   ├── email-variants.md
-│               │   ├── linkedin-variants.md
-│               │   └── personalization-notes.md
-│               ├── leads/            (Skill 4 output)
-│               │   └── all_leads.csv
-│               ├── outreach/         (Skill 5 output)
-│               │   └── messages.csv
-│               └── results/          (Skill 6 output)
-│                   └── learnings.md
+│       ├── positioning.md
+│       └── campaigns/{campaign-slug}/
+│           ├── strategy.md
+│           ├── copy/            email-variants.md, linkedin-variants.md, personalization-notes.md
+│           ├── leads/           all_leads.csv
+│           ├── outreach/        messages.csv
+│           └── results/         learnings.md
 │
 ├── src/
+│   ├── core/skills/             skill-1 through skill-6 (core agentic logic)
 │   ├── lib/
-│   │   ├── clients/
-│   │   │   ├── apollo.ts             ← Primary platform (company + contact search)
-│   │   │   └── openai.ts             ← Copy generation
-│   │   ├── db/
-│   │   │   ├── companies.ts
-│   │   │   ├── contacts.ts           ← replaces buyers.ts
-│   │   │   └── evidence.ts
-│   │   ├── services/
-│   │   │   ├── scoring.ts            ← ICP scoring (threshold: 170 pts)
-│   │   │   ├── deduplication.ts      ← Email + domain dedup
-│   │   │   ├── personalization.ts    ← Placeholder replacement
-│   │   │   ├── campaign-metrics.ts   ← Rate computation
-│   │   │   ├── csv-export.ts         ← CSV building
-│   │   │   └── logging.ts            ← Console + DB logging
-│   │   ├── verticals/                   ← Vertical playbook system
-│   │   │   ├── types.ts              ← Playbook interface, field/skill mappings
-│   │   │   ├── loader.ts             ← Reads .md files from context/verticals/{slug}/
-│   │   │   ├── resolver.ts           ← getEffectiveVertical(offerId, campaignId?)
-│   │   │   ├── context-builder.ts    ← buildSkillContext(skillId, offerId, campaignId?)
-│   │   │   └── index.ts              ← Barrel exports
-│   │   └── supabase.ts               ← Client + TypeScript types
-│   │
-│   ├── types/                        ← Shared TypeScript interfaces
-│   │   ├── offer.ts, company.ts, contact.ts, campaign.ts
-│   │   ├── message.ts, metrics.ts, api.ts
-│   │
-│   ├── core/
-│   │   └── skills/                   ← 6 Skill implementations
-│   │       ├── skill-1-new-offer.ts
-│   │       ├── skill-2-campaign-strategy.ts
-│   │       ├── skill-3-campaign-copy.ts
-│   │       ├── skill-4-find-leads.ts
-│   │       ├── skill-5-launch-outreach.ts
-│   │       └── skill-6-campaign-review.ts
-│   │
-│   ├── scripts/
-│   │   └── seed-context.ts           ← Validates context files exist
-│   │
-│   └── app/api/                      ← Next.js API stubs (future web UI)
-│       ├── offers/route.ts
-│       ├── campaigns/route.ts
-│       ├── leads/route.ts
-│       ├── copy/route.ts
-│       └── review/route.ts
+│   │   ├── clients/             apollo.ts, openai.ts
+│   │   ├── db/                  companies.ts, contacts.ts, evidence.ts
+│   │   ├── services/            scoring.ts, geography.ts, deduplication.ts,
+│   │   │                        personalization.ts, intelligence.ts, csv-export.ts
+│   │   ├── verticals/           types.ts, loader.ts, resolver.ts, context-builder.ts, index.ts
+│   │   └── supabase.ts
+│   └── types/                   offer.ts, company.ts, contact.ts, campaign.ts, message.ts, metrics.ts, api.ts
 │
-├── scripts/                          ← Entry points (npm run skill:N)
-│   └── run-skill-{1-6}-*.ts
+├── frontend/                    ← Next.js dashboard (separate npm workspace)
+│   └── src/
+│       ├── app/dashboard/       offers/, campaigns/, companies/, contacts/, analytics/
+│       ├── app/api/skills/      SSE skill runner endpoints
+│       ├── components/          VerticalSelect.tsx, shared UI
+│       └── lib/                 supabase.ts (browser client), useSkillRunner.ts
 │
-├── supabase/
-│   └── migrations/
-│       └── 001_apollo_gtm_schema.sql ← Full DB schema
-│
-├── package.json
-├── .env                              ← Copy from .env.example
-├── .env.example                      ← All required vars documented
-└── CLAUDE.md                         ← This file
+├── scripts/                     run-skill-{1-6}-*.ts (entry points)
+├── supabase/migrations/         001 through 007
+├── .env                         copy from .env.example
+└── primer.md                    ← Living project memory (authoritative)
 ```
 
 ---
 
-## Configuration & Customization
+## API Clients
 
-### Target Roles (in context/frameworks/signal-generation.md)
-Change to match your hiring needs:
-```
-Data Engineer, ML Engineer, Cloud Architect, Software Engineer
-```
+| Client | File | Purpose |
+|--------|------|---------|
+| Apollo.io | `src/lib/clients/apollo.ts` | Company search, contact discovery, sequences, enrollment |
+| OpenAI | `src/lib/clients/openai.ts` | Copy generation (Skill 3), company classification (Skill 5) |
+| Supabase | `src/lib/supabase.ts` | DB client — service role for API routes, anon key for browser |
 
-### ICP (in context/frameworks/icp-framework.md)
-Define your ideal customer:
-```
-- Startups: Series A+ ($20M+)
-- SMBs: 50-1000 employees
-- Enterprises: 1000+
-```
-
-### Email Principles (in context/copywriting/email-principles.md)
-Your winning email patterns:
-```
-- No generic filler
-- Reference signal directly
-- Short (100-150 words)
-```
-
-### Positioning (in context/frameworks/positioning-canvas.md)
-13 sections that define your offer:
-```
-Category, Target, Problem, Why Now, Alternative, Success Signal,
-Value Prop, Differentiators, Sales Model, Objections, GTM, Pricing, Proof
-```
+**Apollo.io is the single platform** — company search + contact enrichment + sequences + analytics.
 
 ---
 
-## Cost Breakdown
+## Frontend Architecture
 
-### Free
-- Skill 1: New Offer ($0)
-- Skill 2: Campaign Strategy ($0)
-- Skill 3: Campaign Copy (~$0.50 OpenAI)
-- Skill 5: Build outreach CSV ($0)
-- Skill 6: Review + learnings ($0)
+### Data Layer Split
+- CLI skills write to **filesystem** (`offers/{slug}/...`) — DB records may or may not exist
+- Dashboard list pages query **Supabase directly** from browser (`NEXT_PUBLIC_SUPABASE_ANON_KEY`)
+- Campaign detail **Pipeline tab** uses server-side `/api/skills/status` (checks filesystem)
+- Campaign detail **other tabs** (Leads, Copy, Intelligence, Results) use browser-side Supabase — require DB records
+- If offers/campaigns list is empty but direct URLs work → DB is empty, not a frontend bug
 
-### Apollo Credits (Skill 4)
-- Company search: ~1 credit per result
-- Contact enrichment: ~1 credit per contact
-- Email verification: included in Apollo plan
-- **Estimated: 200-500 credits per campaign** (varies by plan)
-
-**Total per full campaign:** ~$2-5 in Apollo credits + $0.50 OpenAI
-
-### Cost Optimization Rules
-1. Score companies against ICP BEFORE enriching contacts (saves credits)
-2. ICP threshold: 170 pts — don't enrich below this
-3. Search 10 roles in one skill run (bulk, not one-by-one)
-4. Only contact decision-makers (CTO, VP Eng, Eng Manager) — not all employees
+### Key Frontend Files
+- `frontend/src/lib/supabase.ts` — Browser Supabase client (singleton, anon key)
+- `frontend/src/lib/useSkillRunner.ts` — Shared SSE skill runner hook
+- `frontend/src/components/VerticalSelect.tsx` — Shared vertical dropdown (loads active verticals from DB)
+- `frontend/src/app/dashboard/offers/[offerSlug]/campaigns/[campaignSlug]/page.tsx` — Campaign detail (~1800 lines); has local `useCampaignSkillRunner` hook — changes to shared hook must be mirrored here
 
 ---
 
-## Safety & Best Practices
+## Gotchas & Non-Obvious Patterns
 
-### LinkedIn Safety
-- ✅ Email outreach primary (safest)
-- ✅ LinkedIn is secondary (manual CEO sending only)
-- ✅ Never automate LinkedIn DMs (account ban risk)
-- ✅ Max 5-10 LinkedIn actions per day
-- ❌ No copy-paste identical messages
-- ❌ No mass connection spamming
+### TypeScript
+- **~60 pre-existing TS errors** exist in `src/core/skills/*.ts` — caused by `.ts` extension imports + top-level await ESM patterns. These pre-date current work; do NOT treat as regressions when you see them.
+- `cd frontend && npx tsc --noEmit` — frontend must stay at **0 errors** before every commit
 
-### Email Safety
-- ✅ Apollo verifies emails automatically (use `email_status: 'verified'` filter)
-- ✅ Respect business hours (9am-5pm recipient time)
-- ✅ Monitor bounce rate (<5%)
-- ✅ Stagger sends (5-10 per hour via Apollo sequences)
-- ❌ Don't send generic emails — signals must be referenced
-- ❌ Don't blast same message everywhere
+### Supabase
+- PostgREST `.single()` returns HTTP 406 when 0 rows match — caught silently by try/catch in frontend
+- RLS is disabled — anon key can read/write all tables
+- FK join in PostgREST: `.select('default_vertical_id, verticals(name)')` — no alias hint needed for single FK
 
-### Deduplication
-- Don't email same person twice — `contacts` table tracks by email
-- Don't contact same company too much — max 2-3 people per company
-- `campaign_companies` table tracks which companies are already in a campaign
+### Vertical Inheritance
+- Resolution: `campaign.vertical_id ?? offer.default_vertical_id`
+- Empty string `""` from frontend forms → coerced to `null` by `|| null` in skill upserts → prevents FK violation
+- `VerticalSelect` with `showInherit={true}` = "Inherit from offer" as blank option
+
+### Geography
+- All geography logic in `src/lib/services/geography.ts` — single source of truth
+- Default scope is Americas — SG/IN/UK excluded unless you set `allowed_countries` on the offer/campaign in Supabase
+
+### Cost Optimization (Skill 4)
+- Companies are **ICP-scored BEFORE contact enrichment** — threshold 170 pts; below-threshold companies never enriched (saves Apollo credits)
+- Geography rejection also runs before enrichment for the same reason
+
+---
+
+## Environment Variables
+
+```bash
+# Required — CLI skills
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+APOLLO_API_KEY=
+OPENAI_API_KEY=
+
+# Required — Frontend
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+
+# Optional (used by some analytics features)
+SUPABASE_ANON_KEY=
+```
 
 ---
 
@@ -405,202 +249,47 @@ Value Prop, Differentiators, Sales Model, Objections, GTM, Pricing, Proof
 | Problem | Solution |
 |---------|----------|
 | Skill 1 won't run | Check `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` in .env |
-| Skill 2 won't find positioning | Run Skill 1 first, check `offers/{slug}/positioning.md` exists |
+| Skill 2 won't find positioning | Run Skill 1 first; check `offers/{slug}/positioning.md` exists |
 | Skill 3 copy fails | Check `OPENAI_API_KEY` has credits; check `email-principles.md` exists |
 | Skill 4 leads fails | Check `APOLLO_API_KEY`; check Apollo account has remaining credits |
-| CSV exports are empty | Check Skill 4 ran successfully; check contacts table has rows |
-| Database errors | Verify migration applied: `supabase/migrations/001_apollo_gtm_schema.sql` |
-| contacts table missing | Run migration in Supabase dashboard SQL editor |
-| tool_usage table missing | Run migration (replaces old api_logs table) |
+| Skill 4 returns 0 results | Geography filter may be excluding all companies — check `[GEOGRAPHY REJECT]` logs |
+| CSV exports empty | Check Skill 4 ran successfully; check contacts table has rows |
+| Database errors | Run all 7 migrations (001–007) in Supabase SQL editor |
+| Frontend shows empty lists | DB is empty — run Skills 1-4 first via CLI or dashboard |
+| TypeScript errors in skills/ | ~60 pre-existing errors are expected; only fix errors in `frontend/` |
 
 ---
 
-## Key Principles
+## Pre-Launch Checklists
 
-1. **Context is Everything** - System is as good as your framework files
-2. **Signals Must Be Observable** - Every signal must map to an API
-3. **Test Before Scaling** - Skills 1-3 are free, Skills 4+ cost money
-4. **Measure Everything** - Database logs track costs, results track ROI
-5. **Iterate Fast** - Each campaign improves based on learnings
-6. **Humans in Control** - No auto-sending, manual approval always
+### Before Skill 1
+- [ ] Customize `context/frameworks/icp-framework.md` and `context/copywriting/email-principles.md`
+- [ ] Create Supabase project; run all 7 migrations
+- [ ] Set `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` in `.env`
 
----
+### Before Skill 4 (costs money)
+- [ ] `APOLLO_API_KEY` set with sufficient credits (~200-500 per campaign)
+- [ ] Skills 1-3 complete (positioning + strategy + copy exist)
+- [ ] ICP defined in `context/frameworks/icp-framework.md`
 
-## Deployment Options
-
-### Option 1: Local Development (Current)
-- Run Skills on your laptop
-- `npm run skill:1` through `skill:6`
-- Manual initiation each time
-
-### Option 2: Scheduled Agent (Future)
-- Migrate to Claude Agent SDK
-- Run autonomously on schedule
-- Skill 1-6 trigger automatically
-- Results email to you nightly
-
-### Option 3: Cloud Deployment (Future)
-- Host on AWS/GCP/Azure
-- Trigger via API or webhook
-- Full automation with monitoring
-- Alert on campaign milestones
+### Before Skill 5
+- [ ] Skill 3 output exists (`copy/email-variants.md`)
+- [ ] Skill 4 output exists (`leads/all_leads.csv` with contacts)
 
 ---
 
-## Getting Started
+## Safety
 
-### Pre-Skill 1 Checklist
-- [ ] Customize context files (icp-framework.md, email-principles.md, etc.)
-- [ ] Create Supabase project
-- [ ] Import database schema from supabase_schema.sql
+### Email
+- Apollo verifies emails automatically — use `email_status: 'verified'` filter
+- Monitor bounce rate (<5%); stagger sends 5-10/hour via Apollo sequences
+- Never blast same generic message — signals must be referenced
 
-### Pre-Skill 4 Checklist
-- [ ] All API keys in .env (TheirStack, Parallel, OpenAI)
-- [ ] Supabase connected and tested
-- [ ] Campaign strategy written (Skill 2 output)
-- [ ] ICP defined and saved
+### LinkedIn
+- Manual only — never automate LinkedIn DMs (account ban risk)
+- Max 5-10 LinkedIn actions per day via CEO account
 
-### Pre-Skill 5 Checklist
-- [ ] Copy variants generated (Skill 3 output)
-- [ ] Leads found and verified (Skill 4 output)
-- [ ] Sales engagement platform set up (Instantly recommended)
-
----
-
-## Next Steps
-
-1. ✅ System built and ready
-2. ⏳ Verify Supabase setup
-3. ⏳ Test Skill 1 (New Offer)
-4. ⏳ Test Skill 2 (Campaign Strategy)
-5. ⏳ Test Skill 3 (Copy generation)
-6. ⏳ Run Skill 4 with small budget ($5 test)
-7. ⏳ Launch to Instantly
-8. ⏳ Run Skill 6 after 2 weeks
-9. ⏳ Iterate based on learnings
-
----
-
-## Support & Documentation
-
-- **README.md** - Quick overview
-- **AGENTIC_SYSTEM_READY.md** - Full explanation
-- **RESTRUCTURING_PROGRESS.md** - What was built
-- `/context/` - All expertise frameworks (read to understand system)
-
----
-
-## Key Files to Know
-
-### Most Important
-- `context/frameworks/icp-framework.md` - Define who you're targeting
-- `context/copywriting/email-principles.md` - Define what works
-- `context/learnings/what-works.md` - Results from campaigns (grows over time)
-
-### Implementation
-- `src/core/skills/` - The 6 Skills (agentic logic)
-- `src/lib/clients/` - API integrations
-- `src/lib/db/` - Database operations
-
-### Execution
-- `scripts/run-skill-*.ts` - Entry points
-- `package.json` - npm run skill:1-6
-
----
-
-## The Vision
-
-This system turns **static campaigns into learning systems**.
-
-Traditional outbound:
-- Build list → Send email → Hope → Repeat
-
-This system:
-- Define ICP → Detect signals → Generate copy → Find leads → Send → Measure → Learn → Update ICP → Repeat (better)
-
-Each iteration improves because the system learns from previous results.
-
-That's the agentic advantage.
-
----
-
-**Status:** ✅ Complete and Ready
-**Time to Campaign:** 30 minutes (Skills 1-6)
-**Time to Results:** 2 weeks (wait for replies)
-**Improvement:** Measurable in 3-5 campaigns
-
-Let's go.
-
----
-
-## Frontend Architecture Notes
-
-### Data Layer Split
-- CLI skills write outputs to **filesystem** (`offers/{slug}/...`) — DB records may or may not exist
-- Dashboard list pages query **Supabase directly** from browser (`NEXT_PUBLIC_SUPABASE_ANON_KEY`)
-- Campaign detail Pipeline tab uses **server-side** `/api/skills/status` (checks filesystem, not DB)
-- Campaign detail other tabs (Leads, Copy, Intelligence, Results) use **browser-side Supabase** — require DB records
-- If offers/campaigns list is empty but direct URLs work, the DB is empty — NOT a frontend bug
-
-### Key Frontend Files
-- `frontend/src/lib/supabase.ts` — Browser client (singleton, anon key)
-- `frontend/src/lib/useSkillRunner.ts` — Shared SSE skill runner hook
-- `frontend/src/app/dashboard/offers/[offerSlug]/campaigns/[campaignSlug]/page.tsx` — Campaign detail (~1800 lines), has local `useCampaignSkillRunner` hook — changes to shared hook must be mirrored here
-- RLS is **disabled** (commented out in migration) — anon key can read all tables
-
-### Frontend Validation & Testing
-- `cd frontend && npx tsc --noEmit` — TypeScript check (run before committing)
-- PostgREST `.single()` returns HTTP 406 when 0 rows match — caught silently by try/catch
-- Google Sheets references were replaced with XLSX Export (settings, landing page, integrations)
-- Empty DB states are handled gracefully on all pages — verify with network tab, not just UI
-
----
-
-## Recent Changes (March 11-13, 2026)
-
-### Vertical Architecture (March 13)
-- Full vertical agent architecture implemented — 3 verticals (staffing, ai-data-consulting, cloud-software-delivery)
-- `src/lib/verticals/` module: types, loader, resolver, context-builder (centralized `buildSkillContext()`)
-- All 6 skills integrated via `buildSkillContext(skillId, offerId, campaignId?)`
-- Per-vertical learnings: Skill 6 writes to both global + vertical-specific `what-works.md`; `memory.ts` reads both
-- DB migration `006_verticals.sql`: verticals table, FK columns on offers + campaigns
-- Remaining: vertical playbook content authoring (24 .md files), UI vertical selector (Section 4)
-
-### Production-Readiness Hardening
-- All 6 skills: added input validation, error recovery, graceful degradation
-- `tool_usage` column names corrected + Supabase error handling added
-- Apollo API deprecations resolved + end-to-end skill testing completed
-- Apollo 422 enrollment error fixed + Skill 5 status check updated
-- Apollo blank templates fixed — two-phase step creation + template repair
-
-### Dashboard UI/UX
-- Mobile sidebar CSS override breaking desktop layout — fixed
-- Comprehensive UI/UX polish pass across all dashboard pages
-- Stale `campaign_metrics` field names corrected in dashboard pages
-- Full operator workflow: `skill_runs` tracking, live data views, XLSX export
-- Broken avatar fixed + account history system built
-- Env vars exposure + hardcoded account data removed from settings
-- Status API path resolution fixed for local development
-- Operator guide added (`OPERATOR_GUIDE.md`)
-
-### Frontend Validation Pass (12 bugs fixed, 12 files)
-- **Security:** Path traversal blocked on artifact download route (`api/artifacts/[id]/route.ts`)
-- **SSE exitCode bug:** Fixed in both `useSkillRunner.ts` and local `useCampaignSkillRunner` — `setExitCode(1)` added to error/onerror handlers
-- **Double-encoding:** Removed extra `decodeURIComponent` in `useSkillRunner.ts`
-- **Slug race conditions:** Fixed in new offer + new campaign forms — slug recalculated at submit time
-- **CSV exports:** Wired up Export CSV buttons on Companies + Contacts pages
-- **Stale branding:** Google Sheets → XLSX Export across landing page, settings, integrations
-- **Dead link:** Positioning artifact link fixed on offer detail page
-- **Env fallbacks:** Added `NEXT_PUBLIC_*` fallbacks in `vercel-paths.ts` for Vercel deployments
-
-### Skill 5 Intelligence UI/UX Polish
-- Intelligence summary bar with color-coded confidence stats
-- Needs-review amber banner for flagged classifications
-- Skill 5 run outcome panel (parsed from `log_lines`)
-- Rich segment cards with accent colors, routing stats, dominant titles
-- Styled section dividers replacing bare `<h3>` tags
-- Company table accent borders per segment
-- Expandable contact rows with full rationale on click
-- Copy tab segment context headers with company/contact counts
-- VariantCard subject line upgraded (larger, bolder)
-- Leads tab buyer persona visibility bumped (full opacity, 11px, medium weight)
+### Deduplication
+- `contacts(email)` UNIQUE constraint prevents duplicate enrichment
+- `campaign_sequences(campaign_id, segment_key)` UNIQUE prevents duplicate sequences
+- `campaign_companies` tracks which companies are in each campaign
