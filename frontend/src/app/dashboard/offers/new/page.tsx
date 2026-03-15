@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { LogPanel } from '@/components/ui/log-panel';
 import { useSkillRunner } from '@/lib/useSkillRunner';
 import { VerticalSelect } from '@/components/VerticalSelect';
+import { GeographySelect } from '@/components/GeographySelect';
 
 interface OfferForm {
   name: string;
@@ -24,6 +25,8 @@ interface OfferForm {
   pricingPackaging: string;
   successStories: string;
   default_vertical_id: string;
+  allowed_countries: string[];
+  allowed_us_states: string[];
 }
 
 const DEFAULTS: OfferForm = {
@@ -42,6 +45,8 @@ const DEFAULTS: OfferForm = {
   pricingPackaging: '15–20% annual salary placement fee or monthly retainer',
   successStories: 'Placed 5 engineers at a Series B fintech in 4 weeks',
   default_vertical_id: '',
+  allowed_countries: [],
+  allowed_us_states: [],
 };
 
 function Field({
@@ -255,6 +260,20 @@ export default function NewOfferPage() {
           <p className="text-xs text-neutral-500 mt-1">
             Optional. Sets the default vertical playbook for all campaigns under this offer.
           </p>
+        </div>
+
+        {/* Geography */}
+        <div className="p-4 bg-neutral-900 border border-neutral-800 rounded-xl">
+          <label className="block text-xs font-medium text-gray-400 mb-3">
+            Geography
+          </label>
+          <GeographySelect
+            countries={form.allowed_countries}
+            onCountriesChange={(v) => setForm((f) => ({ ...f, allowed_countries: v }))}
+            usStates={form.allowed_us_states}
+            onUsStatesChange={(v) => setForm((f) => ({ ...f, allowed_us_states: v }))}
+            helperText="Optional. Leave blank to use all 9 Americas markets (system default). Campaigns can override this."
+          />
         </div>
 
         {/* Submit */}

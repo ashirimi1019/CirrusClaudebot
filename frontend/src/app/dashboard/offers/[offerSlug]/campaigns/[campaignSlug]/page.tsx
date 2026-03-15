@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { PipelineStepper, StatusData } from '@/components/ui/pipeline-stepper';
 import { LogPanel } from '@/components/ui/log-panel';
+import { GeographyDisplay } from '@/components/GeographySelect';
 import { createClient } from '@/lib/supabase';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -663,20 +664,21 @@ export default function CampaignDashboardPage() {
   const [campaignId, setCampaignId] = useState<string | null>(null);
   const [campaignName, setCampaignName] = useState<string | null>(null);
   const [effectiveVertical, setEffectiveVertical] = useState<{ name: string; source: 'campaign' | 'offer' | 'none' } | null>(null);
+  const [effectiveGeography, setEffectiveGeography] = useState<{ countries: string[]; usStates: string[]; source: 'campaign' | 'offer' | 'system' } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const supabase = createClient();
     supabase
       .from('offers')
-      .select('id, default_vertical_id, verticals(id, name, slug)')
+      .select('id, default_vertical_id, allowed_countries, allowed_us_states, verticals(id, name, slug)')
       .eq('slug', offerSlug)
       .single()
       .then(({ data: offer }: { data: any | null }) => {
         if (cancelled || !offer) return;
         supabase
           .from('campaigns')
-          .select('id, name, vertical_id, verticals(id, name, slug)')
+          .select('id, name, vertical_id, allowed_countries, allowed_us_states, verticals(id, name, slug)')
           .eq('offer_id', offer.id)
           .eq('slug', campaignSlug)
           .single()
@@ -696,6 +698,20 @@ export default function CampaignDashboardPage() {
                 setEffectiveVertical({ name: offerVerticalName, source: 'offer' });
               } else {
                 setEffectiveVertical({ name: '', source: 'none' });
+              }
+
+              // Resolve effective geography (mirrors backend resolveGeography())
+              const campaignCountries: string[] | null = campaign?.allowed_countries?.length ? campaign.allowed_countries : null;
+              const offerCountries: string[] | null = offer?.allowed_countries?.length ? offer.allowed_countries : null;
+              const campaignStates: string[] | null = campaign?.allowed_us_states?.length ? campaign.allowed_us_states : null;
+              const offerStates: string[] | null = offer?.allowed_us_states?.length ? offer.allowed_us_states : null;
+
+              if (campaignCountries) {
+                setEffectiveGeography({ countries: campaignCountries, usStates: campaignStates ?? [], source: 'campaign' });
+              } else if (offerCountries) {
+                setEffectiveGeography({ countries: offerCountries, usStates: offerStates ?? [], source: 'offer' });
+              } else {
+                setEffectiveGeography({ countries: [], usStates: [], source: 'system' });
               }
             }
           });
@@ -980,6 +996,14 @@ export default function CampaignDashboardPage() {
           </div>
         </div>
         <EffectiveVerticalBadge vertical={effectiveVertical} />
+        {effectiveGeography && (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 whitespace-nowrap">
+            🌍 {effectiveGeography.countries.length > 0 ? `${effectiveGeography.countries.length} countries` : '9 countries'}
+            <span className="text-emerald-400/50">
+              {effectiveGeography.source === 'campaign' ? '(override)' : effectiveGeography.source === 'offer' ? '(offer)' : '(default)'}
+            </span>
+          </span>
+        )}
         <button
           onClick={fetchStatus}
           disabled={statusLoading}
@@ -1023,6 +1047,20 @@ export default function CampaignDashboardPage() {
                 </span>
               </p>
             </div>
+
+            {/* Effective geography */}
+            {effectiveGeography && (
+              <div className="bg-neutral-900 border border-neutral-800 rounded-xl px-4 py-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">Geography</span>
+                </div>
+                <GeographyDisplay
+                  countries={effectiveGeography.countries}
+                  usStates={effectiveGeography.usStates}
+                  source={effectiveGeography.source}
+                />
+              </div>
+            )}
 
             <PipelineStepper
               statusData={statusData}

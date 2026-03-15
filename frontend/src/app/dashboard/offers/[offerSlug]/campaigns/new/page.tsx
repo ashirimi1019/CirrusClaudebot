@@ -7,6 +7,7 @@ import { ArrowLeft, ChevronDown, ChevronUp } from 'lucide-react';
 import { LogPanel } from '@/components/ui/log-panel';
 import { useSkillRunner } from '@/lib/useSkillRunner';
 import { VerticalSelect } from '@/components/VerticalSelect';
+import { GeographySelect } from '@/components/GeographySelect';
 import { createClient } from '@/lib/supabase';
 
 interface CampaignForm {
@@ -23,6 +24,8 @@ interface CampaignForm {
   expectedVolume: string;
   expectedFit: string;
   vertical_id: string;
+  allowed_countries: string[];
+  allowed_us_states: string[];
 }
 
 const DEFAULTS: CampaignForm = {
@@ -39,6 +42,8 @@ const DEFAULTS: CampaignForm = {
   expectedVolume: '20-30 companies per search',
   expectedFit: '60% will match ICP',
   vertical_id: '',
+  allowed_countries: [],
+  allowed_us_states: [],
 };
 
 function Field({
@@ -88,6 +93,7 @@ export default function NewCampaignPage() {
   const [form, setForm] = useState<CampaignForm>(DEFAULTS);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [offerVerticalName, setOfferVerticalName] = useState<string>('');
+  const [offerAllowedCountries, setOfferAllowedCountries] = useState<string[]>([]);
 
   useEffect(() => {
     if (!offerSlug) return;
@@ -95,13 +101,14 @@ export default function NewCampaignPage() {
     const supabase = createClient();
     supabase
       .from('offers')
-      .select('default_vertical_id, verticals(name)')
+      .select('default_vertical_id, allowed_countries, verticals(name)')
       .eq('slug', offerSlug)
       .single()
-      .then(({ data }: { data: { default_vertical_id: string | null; verticals: { name: string } | null } | null }) => {
+      .then(({ data }: { data: { default_vertical_id: string | null; allowed_countries: string[] | null; verticals: { name: string } | null } | null }) => {
         if (!cancelled) {
           const name = data?.verticals?.name;
           if (name) setOfferVerticalName(name);
+          setOfferAllowedCountries(data?.allowed_countries ?? []);
         }
       })
       .catch(() => {});
@@ -278,6 +285,27 @@ export default function NewCampaignPage() {
               ? `Inheriting from offer: ${offerVerticalName}`
               : 'Leave blank to inherit the vertical from the offer.'}
           </p>
+        </div>
+
+        {/* Geography override */}
+        <div className="p-4 bg-neutral-900 border border-neutral-800 rounded-xl">
+          <label className="block text-xs font-medium text-gray-400 mb-3">
+            Geography Override
+          </label>
+          <GeographySelect
+            countries={form.allowed_countries}
+            onCountriesChange={(v) => setForm((f) => ({ ...f, allowed_countries: v }))}
+            usStates={form.allowed_us_states}
+            onUsStatesChange={(v) => setForm((f) => ({ ...f, allowed_us_states: v }))}
+            showInherit={true}
+            helperText={
+              form.allowed_countries.length === 0
+                ? offerAllowedCountries.length > 0
+                  ? `Inheriting from offer: ${offerAllowedCountries.join(', ')}`
+                  : 'Leave blank to inherit geography from the offer (or system default: all 9 Americas markets).'
+                : undefined
+            }
+          />
         </div>
 
         {/* Submit */}

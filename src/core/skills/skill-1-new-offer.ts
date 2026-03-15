@@ -31,6 +31,8 @@ export interface OfferConfig {
   pricingPackaging: string;
   successStories: string;
   default_vertical_id?: string;
+  allowed_countries?: string[];
+  allowed_us_states?: string[] | null;
 }
 
 interface PositioningInput extends OfferConfig {
@@ -139,6 +141,8 @@ export async function runSkill1NewOffer(config?: OfferConfig): Promise<string> {
       name: input.offerName,
       slug: input.offerSlug,
       default_vertical_id: config?.default_vertical_id || null,
+      allowed_countries: config?.allowed_countries?.length ? config.allowed_countries : null,
+      allowed_us_states: config?.allowed_us_states?.length ? config.allowed_us_states : null,
       positioning: {
         category: input.category,
         targetCustomer: input.targetCustomer,

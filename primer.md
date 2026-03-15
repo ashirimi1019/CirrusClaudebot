@@ -217,6 +217,35 @@ context/
 
 ## Change Log
 
+### 2026-03-15 — Geography UI (operator-facing)
+
+**Goal:** Give operators dashboard control over geography scope — previously only configurable directly in Supabase.
+
+**Scope decisions:**
+- **Create forms only** — no inline edit or separate edit pages in this pass
+- **9-country supported list** — United States, Canada, Mexico, Brazil, Argentina, Chile, Colombia, Peru, Uruguay (mirrors `DEFAULT_ALLOWED_COUNTRIES`)
+- **Campaign blank = inherit** — mirrors the vertical pattern; blank means inherit from offer (or system default)
+- **Campaign detail = effective geography + source label** — shows whether geography comes from campaign override, offer, or system default
+
+**Files changed:**
+- `frontend/src/components/GeographySelect.tsx` (NEW) — `GeographySelect` (pill multi-select + US states sub-select) + `GeographyDisplay` (read-only display with source label)
+- `frontend/src/app/dashboard/offers/new/page.tsx` — added Geography section after Vertical
+- `frontend/src/app/dashboard/offers/[offerSlug]/campaigns/new/page.tsx` — added Geography Override section with inherit text + offer country preview
+- `frontend/src/app/dashboard/offers/[offerSlug]/campaigns/[campaignSlug]/page.tsx` — compact geography badge in top bar + full `GeographyDisplay` in Pipeline tab
+- `src/core/skills/skill-1-new-offer.ts` — added `allowed_countries` + `allowed_us_states` to `OfferConfig` interface + DB upsert
+- `src/core/skills/skill-2-campaign-strategy.ts` — added `allowed_countries` + `allowed_us_states` to `CampaignConfig` interface + DB upsert
+
+**UX behavior:**
+- Country pills — click to toggle; empty = system default
+- US states sub-panel — appears only when United States is selected; empty = all states
+- Campaign form inherit text — shows offer's countries when available: *"Inheriting from offer: United States, Canada…"*
+- Campaign detail top bar — compact badge: *"🌍 3 countries (override)"*
+- Campaign detail Pipeline tab — full `GeographyDisplay` card showing all countries + source label
+
+**Deferred:** Edit forms (offer + campaign), broader country list expansion, geography filter in Leads tab
+
+---
+
 ### 2026-03-14 — Stale-lock cleanup for active-run lock (commit c59ad00)
 
 **Goal:** Prevent stuck `running` rows from permanently blocking future skill runs when a prior run crashed, was Vercel-killed, or otherwise failed to finalize.
@@ -395,7 +424,7 @@ context/
 
 **Migration 007 applied to live Supabase** — both columns added to offers + campaigns tables.
 
-**Remaining:** Geography config UI in offer/campaign create forms (backend fully wired; frontend fields not yet built).
+**Geography UI shipped 2026-03-15 ✅** — See Geography UI section below for full scope decisions.
 
 ---
 
@@ -620,7 +649,7 @@ context/verticals/cloud-software-delivery/
 ## What Should Be Worked On Next
 
 1. **Run end-to-end demo with a vertical-aware offer** — Section 4 UI is complete; validate the full resolution chain in production: create offer with staffing vertical → create campaign → confirm `EffectiveVerticalBadge` shows "(offer)" → add campaign override → confirm badge updates to "(override)"
-2. **Geography UI** — Add `allowed_countries` / `allowed_us_states` config fields to offer/campaign create forms so operators can set geography scope from the dashboard (migration 007 applied; backend fully wired; frontend UI not yet built)
+2. ~~**Geography UI**~~ — ✅ Shipped 2026-03-15. See Geography UI section in Change Log.
 3. **Make scoring vertical-configurable** — `scoring.ts` currently hardcoded; vertical `scoring.md` should influence ICP scoring weights
 4. ~~**Skills 4 & 5: actively consume vertical context**~~ ✅ DONE (2026-03-14 sprint)
 5. ~~**LinkedIn variants**~~ ✅ DONE (2026-03-14 sprint)

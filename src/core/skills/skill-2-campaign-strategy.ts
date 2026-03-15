@@ -30,6 +30,8 @@ export interface CampaignConfig {
   expectedVolume: string;
   expectedFit: string;
   vertical_id?: string;
+  allowed_countries?: string[];
+  allowed_us_states?: string[] | null;
 }
 
 interface CampaignStrategyInput extends CampaignConfig {
@@ -193,6 +195,8 @@ export async function runSkill2CampaignStrategy(offerSlug?: string, config?: Cam
           messaging_framework: input.messagingFramework,
         },
         vertical_id: config?.vertical_id || null,
+        allowed_countries: config?.allowed_countries?.length ? config.allowed_countries : null,
+        allowed_us_states: config?.allowed_us_states?.length ? config.allowed_us_states : null,
       },
       { onConflict: 'offer_id,slug' }
     );
