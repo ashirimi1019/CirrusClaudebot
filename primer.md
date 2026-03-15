@@ -216,6 +216,33 @@ context/
 
 ## Change Log
 
+### 2026-03-14 — Stale-lock cleanup for active-run lock (commit c59ad00)
+
+**Goal:** Prevent stuck `running` rows from permanently blocking future skill runs when a prior run crashed, was Vercel-killed, or otherwise failed to finalize.
+
+**Root cause:** `finaliseRun()` is called in named exception branches but NOT in the `finally` block. If Vercel terminates the handler at `maxDuration` (5 min), the `skill_runs` row stays `status='running'` forever, permanently blocking the active-run lock.
+
+**Design decisions:**
+- **Stale threshold:** 10 minutes (`STALE_LOCK_MS = 10 * 60 * 1000`) — 2× Vercel's 5-minute hard limit; conservative enough to avoid false positives
+- **Terminal status:** `status='failed'` with `log_lines = ['[stale-lock cleanup] Prior run exceeded stale threshold and was auto-closed']` — no new status values, no frontend ripple effects
+- **Stale detection:** Based solely on `started_at` (existing column) — no schema changes, no heartbeat yet
+- **Heartbeat / `updated_at`:** Deferred; documented as a future hardening improvement below
+
+**How it works (inline in the active-run lock check):**
+1. Lock check finds a `running` row for the same campaign/offer
+2. Age = `Date.now() - new Date(started_at).getTime()`
+3. If age > 10 min → stale: update row to `failed` + log_lines note, log warning, fall through to allow new run
+4. If age ≤ 10 min → fresh: log it, return 409 as before
+5. Stale update is non-fatal (try/catch) — new run is allowed even if the update fails
+
+**Files changed:** `frontend/src/app/api/skills/run/route.ts`
+
+**No migration needed** — uses existing `started_at`, `status`, `log_lines`, `finished_at` columns.
+
+**Future hardening:** Add `updated_at` to `skill_runs` and emit a heartbeat update every N log lines inside the stream. This would allow shrinking the stale threshold from 10 min to the actual elapsed time since last activity, making stale detection more precise.
+
+---
+
 ### 2026-03-14 — Supabase-backed rate limiting + active-run lock (commits 24e45b9, d5fba22)
 
 **Goal:** Replace Upstash-based rate limiting (which was a dead no-op — env vars never set) with a Supabase-backed implementation that works immediately with the existing stack.
