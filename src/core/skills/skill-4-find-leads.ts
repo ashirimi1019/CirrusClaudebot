@@ -53,6 +53,53 @@ const ICP_TITLES = [
 const ICP_EMPLOYEE_RANGES = ['51,200', '201,500', '501,1000', '1001,5000'];
 
 /**
+ * Vertical-specific buyer titles for Apollo decision-maker search.
+ * When a vertical is active, these titles replace the generic ICP_TITLES.
+ *
+ * Rationale:
+ * - staffing: CTOs and Eng VPs own hiring decisions → same as generic
+ * - ai-data-consulting: Data/ML leadership are the primary buyers
+ * - cloud-software-delivery: Platform/Infra/SRE leadership are the buyers
+ */
+const VERTICAL_BUYER_TITLES: Record<string, string[]> = {
+  'staffing': [
+    'CTO',
+    'VP of Engineering',
+    'VP Engineering',
+    'Director of Engineering',
+    'Head of Engineering',
+    'Founder',
+    'Co-Founder',
+    'CIO',
+  ],
+  'ai-data-consulting': [
+    'Chief Data Officer',
+    'VP of Data',
+    'VP Data',
+    'Head of Data',
+    'Director of Data Engineering',
+    'Director of Machine Learning',
+    'Head of AI',
+    'Head of ML',
+    'CTO',
+    'Founder',
+    'Co-Founder',
+  ],
+  'cloud-software-delivery': [
+    'VP of Infrastructure',
+    'VP Infrastructure',
+    'Head of Platform',
+    'Director of Platform Engineering',
+    'Director of DevOps',
+    'Head of DevOps',
+    'Head of SRE',
+    'VP of Engineering',
+    'CTO',
+    'Founder',
+  ],
+};
+
+/**
  * Vertical-specific role lists for Apollo hiring-signal search.
  * When a vertical is active, this list replaces the generic default.
  * Roles are chosen based on the vertical's ICP hiring patterns.
@@ -195,6 +242,7 @@ export async function runSkill4FindLeads(): Promise<void> {
   tracker.startStep('Load vertical context');
   let verticalContext = '';
   let geographyConfig: GeographyConfig = resolveGeography(null);
+  let activeVerticalSlug: string | undefined;
   try {
     const sb = getSupabaseClient();
     const { data: offerRow } = await sb
@@ -220,11 +268,13 @@ export async function runSkill4FindLeads(): Promise<void> {
         const verticalRoles = VERTICAL_ROLE_MAP[verticalCtx.effectiveVertical];
         if (verticalRoles && verticalRoles.length > 0) {
           roles = verticalRoles;
+          activeVerticalSlug = verticalCtx.effectiveVertical;
           tracker.completeStep(
             'Load vertical context',
             `vertical="${verticalCtx.effectiveVerticalName}", roles overridden to ${roles.length} vertical-specific roles [${verticalRoles.slice(0, 3).join(', ')}, ...], sections=[${verticalCtx.loadedSections.join(', ')}]`
           );
         } else {
+          activeVerticalSlug = verticalCtx.effectiveVertical;
           tracker.completeStep(
             'Load vertical context',
             `vertical="${verticalCtx.effectiveVerticalName}", sections=[${verticalCtx.loadedSections.join(', ')}]`
@@ -254,12 +304,21 @@ export async function runSkill4FindLeads(): Promise<void> {
   const seenIds = new Set<string>();
   let searchFailures = 0;
 
+  // Track which roles triggered each company — used for specific signal labels
+  const companySignalRoles = new Map<string, string[]>();
+
   const ROLE_BATCH_SIZE = 3;
   for (let i = 0; i < roles.length; i += ROLE_BATCH_SIZE) {
     const roleBatch = roles.slice(i, i + ROLE_BATCH_SIZE);
     try {
       const companies = await searchCompaniesByHiringRoles(roleBatch, buildApolloLocationFilter(geographyConfig), ICP_EMPLOYEE_RANGES, 25);
       for (const c of companies) {
+        // Track signal roles (all batches, not just first-seen)
+        const existingRoles = companySignalRoles.get(c.id) || [];
+        const newRoles = roleBatch.filter((r) => !existingRoles.includes(r));
+        if (newRoles.length > 0) {
+          companySignalRoles.set(c.id, [...existingRoles, ...newRoles]);
+        }
         if (!seenIds.has(c.id)) {
           seenIds.add(c.id);
           allCompanies.push(c);
@@ -284,10 +343,15 @@ export async function runSkill4FindLeads(): Promise<void> {
 
   // ─── Step 3: Score against ICP (using shared scoring service) ───
   tracker.startStep('Score against ICP');
-  const qualifyingCompanies = allCompanies.filter((c) => {
-    const score = scoreCompany(c);
-    return score.qualifies;
-  });
+  const qualifyingCompanies: ApolloCompany[] = [];
+  for (const c of allCompanies) {
+    const score = scoreCompany(c, activeVerticalSlug);
+    if (score.qualifies) {
+      qualifyingCompanies.push(c);
+    } else if (score.rejection_reason) {
+      tracker.warn(`[ICP REJECT] ${c.name}: ${score.rejection_reason}`);
+    }
+  }
 
   if (qualifyingCompanies.length === 0) {
     tracker.warn(`0/${allCompanies.length} companies met ICP threshold (${ICP_THRESHOLD}). Consider relaxing filters.`);
@@ -328,8 +392,17 @@ export async function runSkill4FindLeads(): Promise<void> {
   let dbContactFails = 0;
   let dmSearchFails = 0;
 
+  // Build a human-readable signal label from the roles that triggered this company
+  const buildSignalLabel = (detectedRoles: string[]): string => {
+    if (!detectedRoles || detectedRoles.length === 0) return 'Hiring engineering talent';
+    const shown = detectedRoles.slice(0, 2);
+    return shown.length === 1
+      ? `Hiring ${shown[0]}`
+      : `Hiring ${shown[0]}, ${shown[1]}`;
+  };
+
   for (const company of geoAcceptedCompanies) {
-    const score = scoreCompany(company);
+    const score = scoreCompany(company, activeVerticalSlug);
     const primaryDomain = (company as any).primary_domain;
     const domain = primaryDomain
       ? primaryDomain
@@ -362,7 +435,7 @@ export async function runSkill4FindLeads(): Promise<void> {
       await insertEvidence({
         company_id: dbCompany.id,
         type: 'job_post',
-        title: `Hiring engineering talent (detected via Apollo)`,
+        title: buildSignalLabel(companySignalRoles.get(company.id) || []) + ' (detected via Apollo)',
         raw_json: { apollo_id: company.id, keywords: company.keywords },
         source: 'apollo',
         posted_at: new Date().toISOString(),
@@ -373,14 +446,17 @@ export async function runSkill4FindLeads(): Promise<void> {
 
     companiesOutput.push({
       id: dbCompany.id, apollo_id: company.id, domain, name: company.name,
-      hiring_signal: `Hiring engineering talent`, fit_score: score.total,
+      hiring_signal: buildSignalLabel(companySignalRoles.get(company.id) || []), fit_score: score.total,
       employee_count: company.employee_count, industry: company.industry,
     });
 
     // Find decision-makers
     let people: ApolloPerson[] = [];
     try {
-      people = await searchDecisionMakers([company.id], ICP_TITLES, 5);
+      const buyerTitles = activeVerticalSlug
+        ? (VERTICAL_BUYER_TITLES[activeVerticalSlug] ?? ICP_TITLES)
+        : ICP_TITLES;
+      people = await searchDecisionMakers([company.id], buyerTitles, 5);
       console.log(`    → Found ${people.length} decision-makers`);
     } catch (err: any) {
       dmSearchFails++;
@@ -404,7 +480,7 @@ export async function runSkill4FindLeads(): Promise<void> {
         });
         contactsOutput.push({
           id: buyer.id, company_id: dbCompany.id, company_name: company.name,
-          company_domain: domain, hiring_signal: `Hiring engineering talent`,
+          company_domain: domain, hiring_signal: buildSignalLabel(companySignalRoles.get(company.id) || []),
           fit_score: score.total, first_name: person.first_name, last_name: person.last_name,
           title: person.title || '', email, linkedin_url: person.linkedin_url || '',
         });
