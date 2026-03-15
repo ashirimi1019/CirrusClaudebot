@@ -43,7 +43,7 @@ Signal-driven outbound campaign automation for CirrusLabs's staffing/consulting 
 
 ## Database Schema
 
-**Supabase** — 7 migrations applied:
+**Supabase** — 8 migrations applied:
 
 | Migration | Purpose |
 |-----------|---------|
@@ -54,8 +54,9 @@ Signal-driven outbound campaign automation for CirrusLabs's staffing/consulting 
 | `005_campaign_sequences.sql` | campaign_sequences table with UNIQUE(campaign_id, segment_key) |
 | `006_verticals.sql` | verticals table, FK columns on offers + campaigns |
 | `007_geography.sql` | allowed_countries + allowed_us_states (jsonb) on offers + campaigns |
+| `008_rate_limiting.sql` | `rate_limit_buckets` table + `increment_rate_limit` RPC — applied 2026-03-15, verified ✅ |
 
-**Key tables:** offers, companies, contacts, campaigns, campaign_companies, message_variants, messages, tool_usage, skill_runs, company_intelligence, contact_intelligence, segment_summaries, campaign_sequences, verticals
+**Key tables:** offers, companies, contacts, campaigns, campaign_companies, message_variants, messages, tool_usage, skill_runs, company_intelligence, contact_intelligence, segment_summaries, campaign_sequences, verticals, rate_limit_buckets
 
 **RLS:** Disabled (commented out in migration) — anon key can read all tables.
 
@@ -281,7 +282,7 @@ context/
 - `frontend/package.json` + `frontend/package-lock.json` (Upstash removed)
 - `.env.example` (Upstash section removed)
 
-**Required deployment step:** Apply migration 008 in Supabase SQL editor. No new env vars needed.
+**Migration 008 applied 2026-03-15 ✅** — `rate_limit_buckets` table and `increment_rate_limit` RPC verified in production. Rate limiting and active-run lock are now live.
 
 **Remaining gap (documented, not implemented):** If Vercel forcefully terminates a handler mid-cleanup, a `skill_runs` row could be left as `status='running'` permanently, blocking the active-run lock until manually resolved. Mitigation: a stale-run cleanup job or periodic background function that marks rows older than 10 minutes as `status='stale'`. Low priority for internal use.
 
@@ -630,5 +631,5 @@ context/verticals/cloud-software-delivery/
 10. **`xlsx` package (U6)** — `xlsx@0.18.5` has known CVEs and is abandoned; replace with `exceljs`
 11. **Verify Apollo `num_sent_emails` field at runtime** — fallback chain `num_sent_emails ?? emails_sent_count ?? num_contacts` is best-supported from code inspection; confirm with a live campaign that the correct delivery volume is returned
 12. ~~**Upstash Redis setup for production rate limiting**~~ ✅ REPLACED — Supabase-backed rate limiting implemented; apply migration 008 in Supabase SQL editor to activate
-13. **Apply migration 008 in Supabase SQL editor** — `supabase/migrations/008_rate_limiting.sql` creates `rate_limit_buckets` table and `increment_rate_limit` function; rate limiting is inactive until this is applied
+13. ~~**Apply migration 008 in Supabase SQL editor**~~ — ✅ Applied 2026-03-15. `rate_limit_buckets` table and `increment_rate_limit` RPC verified. Smoke test passed (allowed=true, count=1). One stale `running` skill_run row from 2026-03-12 found and manually closed as `failed`.
 14. **Stale-run lock cleanup** — if Vercel terminates a handler mid-flight, a `skill_runs` row can be stuck as `status='running'` permanently, blocking active-run lock; add a periodic cleanup job or Supabase Edge Function cron to mark rows older than 10 minutes as `status='stale'`
