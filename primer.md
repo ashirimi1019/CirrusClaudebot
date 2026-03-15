@@ -217,6 +217,26 @@ context/
 
 ## Change Log
 
+### 2026-03-15 — Vertical-aware research hardening (Skill 4)
+
+**Goal:** Make company scoring, buyer title selection, and signal labeling vertical-aware so each vertical uses the right keywords, right buyer titles, and specific hiring signals.
+
+**What changed:**
+- `src/types/company.ts` — Added `rejection_reason?: string` to `IcpScore` interface
+- `src/lib/services/scoring.ts` — Added `VERTICAL_TECH_KEYWORDS` map (3 verticals); `scoreCompany()` now accepts optional `verticalSlug` param and populates `rejection_reason` on disqualification; exported `getVerticalTechKeywords()` helper
+- `src/core/skills/skill-4-find-leads.ts`:
+  - Added `VERTICAL_BUYER_TITLES` map (3 verticals — staffing, ai-data-consulting, cloud-software-delivery)
+  - Passes `activeVerticalSlug` to `scoreCompany()` for vertical-specific keyword matching
+  - Uses `VERTICAL_BUYER_TITLES[activeVerticalSlug]` for `searchDecisionMakers` when vertical is configured
+  - Tracks `companySignalRoles` Map during search loop — records which roles triggered each company
+  - `buildSignalLabel()` helper converts detected roles to human-readable signal (e.g. "Hiring Data Engineer, ML Engineer")
+  - Evidence titles and CSV `hiring_signal` fields now reflect actual detected roles instead of generic "Hiring engineering talent"
+  - ICP rejection logging: disqualified companies now log `[ICP REJECT] CompanyName: score 145 < threshold 170 (missing points: funding, tech_keywords)`
+
+**No schema changes.** No new files. No API changes. Backward-compatible — all `verticalSlug` params are optional.
+
+---
+
 ### 2026-03-15 — Geography UI (operator-facing)
 
 **Goal:** Give operators dashboard control over geography scope — previously only configurable directly in Supabase.
