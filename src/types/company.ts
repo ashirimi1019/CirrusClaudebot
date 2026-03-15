@@ -26,6 +26,8 @@ export interface IcpScore {
   revenue_score: number;
   tech_keywords: number;
   qualifies: boolean;
+  /** Human-readable reason when qualifies=false, e.g. "score 145 < threshold 170 (missing: funding, tech_keywords)" */
+  rejection_reason?: string;
 }
 
 export type CompanySegment = 'startup' | 'smb' | 'mid_market' | 'enterprise' | 'unknown';
